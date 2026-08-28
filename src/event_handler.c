@@ -31,15 +31,21 @@ void event_handler(game_t *g)
     }
 
     // Enhancement (explicit user request): holding ENTER (not just
-    // pressing it once) ramps barrel spawn rate up the longer it's
-    // held -- starts at one spawn/0.35s, ramps to one/0.02s over 3s.
+    // pressing it once) progressively sends more and more barrels the
+    // longer it's held -- starts slow (one spawn every 0.4s) and ramps
+    // up to very fast (one every 0.015s, ~66/s) over 2.5s of continuous
+    // hold, so the acceleration is clearly noticeable within a second
+    // or two rather than a subtle change.
     if (!g->in_menu && !g->game_over) {
         if (IsKeyDown(KEY_ENTER)) {
             g->enter_hold_time += g->game_dt;
             g->enter_spawn_accum += g->game_dt;
-            float t = g->enter_hold_time / 3.0f;
+            float t = g->enter_hold_time / 2.5f;
             if (t > 1.0f) t = 1.0f;
-            float interval = 0.35f - t * (0.35f - 0.02f);
+            // ease-in (t*t) so the ramp-up itself accelerates, making
+            // the "progressively more and more" effect obvious
+            float eased = t * t;
+            float interval = 0.4f - eased * (0.4f - 0.015f);
             while (g->enter_spawn_accum > interval) {
                 spawn_barrel(g, 1);
                 g->enter_spawn_accum -= interval;

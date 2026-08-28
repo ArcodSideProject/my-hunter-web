@@ -46,6 +46,20 @@ void initialize_game(game_t *g)
     g->game_dt = 0;
     g->dt = 0;
 
+    // NOTE: HideCursor() breaks GetMousePosition() on the web/Emscripten
+    // platform specifically -- rcore_web.c's MouseCursorPosCallback only
+    // updates the absolute cursor position when cursorHidden is FALSE;
+    // once hidden it silently switches to a relative-movement/pointer-
+    // lock model that never gets properly engaged here, leaving
+    // GetMousePosition() stuck returning whatever it last had (usually
+    // (0,0)) forever. This is exactly why the in-game crosshair sprite
+    // didn't track the real cursor. Desktop's GLFW backend has no such
+    // issue (GLFW_CURSOR_HIDDEN still tracks absolute position
+    // normally), so only call it there; the web build instead hides the
+    // system cursor purely via CSS (see web/shell.html's `cursor: none`
+    // on the canvas), which has no effect on input tracking.
+#if !defined(PLATFORM_WEB)
     HideCursor();
+#endif
     SetTargetFPS(FPS);
 }

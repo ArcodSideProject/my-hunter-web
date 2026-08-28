@@ -16,7 +16,15 @@ static void calculate_shadow(gragas_t *gragas)
 
 static void stand_on_floor(gragas_t *gragas)
 {
-    if (gragas->rect.y > HEIGHT - gragas->rect.height - G_FLOOR_HEIGHT) {
+    // NOTE: changed from the original's strict `>` to `>=`. With `>`,
+    // the exact frame Gragas's rect.y lands precisely on the floor
+    // line, this check is false (equal, not greater), so gravity
+    // accumulates for one more frame before the *next* frame's check
+    // catches it -- producing a permanent 1-frame-wide back-and-forth
+    // (504.0 <-> 505.1px) every single tick while grounded. `>=`
+    // closes that gap so the snap fires the instant he reaches the
+    // floor line instead of one frame late.
+    if (gragas->rect.y >= HEIGHT - gragas->rect.height - G_FLOOR_HEIGHT) {
         gragas->at_floor = true;
         if (gragas->jumping)
             return;

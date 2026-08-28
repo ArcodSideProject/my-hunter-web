@@ -4,16 +4,6 @@
 */
 #include "my.h"
 
-static float my_round(float number)
-{
-    int int_number = (int)number;
-    if (int_number % 100 > 50)
-        int_number += 100 - int_number % 100;
-    else
-        int_number -= int_number % 100;
-    return (float)int_number;
-}
-
 static void walking_animation(gragas_t *gragas, float rawDt)
 {
     gragas->clock += rawDt;
@@ -27,7 +17,19 @@ static void walking_animation(gragas_t *gragas, float rawDt)
 
 static void touching_barrel(gragas_t *gragas, barrel_t *barrel)
 {
-    if (my_round(gragas->rect.x) == my_round(barrel->rect.x)) {
+    // NOTE: the original used my_round(gragas->rect.x)==my_round(barrel->rect.x),
+    // rounding both X positions to the nearest HUNDRED pixels. That's a
+    // very coarse bucket -- two positions up to ~90px apart can still
+    // round to the same hundred and register as a "touch", letting
+    // Gragas kill a barrel well before he's actually next to it. That's
+    // exactly what reads as the explosion "playing like it was shot
+    // very far": the explosion animation plays at the barrel's real
+    // (still distant) position while Gragas is still visibly
+    // approaching. Replaced with an actual proximity check tight
+    // enough to require them to be genuinely close/overlapping,
+    // matching how player clicks already require literal overlap
+    // (frect_contains) in barrel_touch.c.
+    if (ABS(gragas->rect.x - barrel->rect.x) < gragas->rect.width) {
         if (!barrel->dead) {
             kill_barrel(barrel);
             gragas->gscore->number++;

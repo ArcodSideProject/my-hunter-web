@@ -39,7 +39,8 @@ static void animate_explosion(barrel_t *barrel, float rawDt)
     float sec = barrel->clock;
     barrel->clock += rawDt;
     sprite_set_texture_rect(&barrel->sp, barrel->rect_anim);
-    if (sec > 0.035f) {
+    // sped up ~13% per explicit request (0.035s -> 0.0305s per frame)
+    if (sec > 0.0305f) {
         barrel->rect_anim.x += EXPLOSION_WIDTH + 3;
         barrel->clock = 0;
         barrel->explosion_state += 1;

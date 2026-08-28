@@ -37,7 +37,7 @@ static void draw_text_int(textint_t *t, Font font, bool hasFont)
         DrawText(buf, (int)t->pos.x, (int)t->pos.y, 32, WHITE);
 }
 
-void draw_on_screen(game_t *g)
+void draw_on_screen_background_and_gameplay(game_t *g)
 {
     draw_background(g->bg);
     if (g->in_menu)
@@ -52,7 +52,17 @@ void draw_on_screen(game_t *g)
     }
     draw_text_int(g->score, g->font, g->hasFont);
     draw_text_int(g->round, g->font, g->hasFont);
+}
+
+void draw_on_screen_foreground(game_t *g)
+{
     draw_sprite(&g->bg->tree);
     draw_sprite(&g->bg->front_grass);
     draw_sprite(&g->sight);
+}
+
+void draw_on_screen(game_t *g)
+{
+    draw_on_screen_background_and_gameplay(g);
+    draw_on_screen_foreground(g);
 }

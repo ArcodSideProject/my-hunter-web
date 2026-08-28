@@ -232,6 +232,8 @@ void gragas_touch(gragas_t *gragas, Vector2 mpos);
 void move_clouds(rsprite_t *clouds, float *clouds_speed, int score);
 
 void draw_on_screen(game_t *g);
+void draw_on_screen_background_and_gameplay(game_t *g);
+void draw_on_screen_foreground(game_t *g);
 
 void spawn_round(game_t *g, float rawDt);
 

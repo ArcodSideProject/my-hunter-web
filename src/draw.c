@@ -45,7 +45,7 @@ static void draw_enter_hint(game_t *g)
     // have their own separate messaging).
     const char *hint = "Hold ENTER to spawn more barrels";
     int fontSize = 20;
-    Vector2 pos = {16, HEIGHT - 32};
+    Vector2 pos = {16, HEIGHT - 60};
     if (g->hasFont) {
         DrawTextEx(g->font, hint, pos, fontSize, 1, (Color){255, 255, 255, 200});
     } else {
@@ -68,14 +68,18 @@ void draw_on_screen_background_and_gameplay(game_t *g)
     }
     draw_text_int(g->score, g->font, g->hasFont);
     draw_text_int(g->round, g->font, g->hasFont);
-    if (!g->in_menu && !g->game_over)
-        draw_enter_hint(g);
 }
 
 void draw_on_screen_foreground(game_t *g)
 {
     draw_sprite(&g->bg->tree);
     draw_sprite(&g->bg->front_grass);
+    // Drawn AFTER front_grass (not before, in the gameplay pass where
+    // it was originally placed) -- front_grass is a full-width opaque
+    // strip covering roughly the bottom ~13% of the screen, which was
+    // completely painting over the hint text at its old position.
+    if (!g->in_menu && !g->game_over)
+        draw_enter_hint(g);
     draw_sprite(&g->sight);
 }
 

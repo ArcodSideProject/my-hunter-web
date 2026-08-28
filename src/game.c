@@ -18,6 +18,20 @@ static Vector2 V2Mul(Vector2 v, float s) { return (Vector2){v.x * s, v.y * s}; }
 static Vector2 V2Add(Vector2 a, Vector2 b) { return (Vector2){a.x + b.x, a.y + b.y}; }
 static float AbsF(float x) { return x < 0 ? -x : x; }
 
+// ---- pixel-space (Y-down, top-left origin) <-> Box2D meter-space (Y-up)
+// conversion helpers. `pixelTopLeft` is the sprite's top-left corner in
+// game/screen coordinates; Box2D bodies are positioned by their CENTER.
+static b2Vec2 PixelTopLeftToB2Center(Vector2 topLeft, float w, float h) {
+    float cx = topLeft.x + w / 2.0f;
+    float cy = topLeft.y + h / 2.0f;
+    return (b2Vec2){ cx / PIXELS_PER_METER, (HEIGHT - cy) / PIXELS_PER_METER };
+}
+static Vector2 B2CenterToPixelTopLeft(b2Vec2 center, float w, float h) {
+    float px = center.x * PIXELS_PER_METER;
+    float py = HEIGHT - center.y * PIXELS_PER_METER;
+    return (Vector2){ px - w / 2.0f, py - h / 2.0f };
+}
+
 static Rectangle BarrelRect(Barrel *b) {
     return (Rectangle){b->pos.x, b->pos.y, BARREL_W, BARREL_H};
 }
@@ -53,12 +67,63 @@ static int RoundSettings(int round, float *spawnRate, int *barrelHealth,
 
 void InitGameWorld(GameWorld *world) {
     Assets savedAssets = world->assets; // preserve loaded textures across resets
+    // Destroy any existing physics world/bodies before the memset wipes
+    // their handles out from under us -- b2WorldId 0 (default-zeroed) is
+    // not a valid handle, so without this we'd leak the old world on
+    // every restart (STATE_GAME_OVER -> SPACE/ENTER).
+    if (b2World_IsValid(world->physicsWorld)) {
+        DestroyPhysicsWorld(world);
+    }
     memset(world, 0, sizeof(GameWorld));
     world->assets = savedAssets;
     world->state = STATE_MENU;
     world->round = 0;
     world->cloudsSpeed = 20.0f;
     world->treeTransparency = 255.0f;
+    InitPhysicsWorld(world);
+}
+
+void InitPhysicsWorld(GameWorld *world) {
+    b2WorldDef worldDef = b2DefaultWorldDef();
+    worldDef.gravity = (b2Vec2){ 0.0f, -20.0f }; // m/s^2, tuned to feel close to the original's snappy arcade fall speed
+    world->physicsWorld = b2CreateWorld(&worldDef);
+
+    // Static floor: a thin box spanning the play area width, top edge at
+    // the same floor line barrels used to clamp to by hand
+    // (HEIGHT - FLOOR_HEIGHT), so Gragas/round logic (which still checks
+    // pixel Y) doesn't need to change.
+    float floorTopY = HEIGHT - FLOOR_HEIGHT;
+    b2BodyDef floorDef = b2DefaultBodyDef();
+    floorDef.position = PixelTopLeftToB2Center((Vector2){0, floorTopY}, WIDTH, 40.0f);
+    world->floorBody = b2CreateBody(world->physicsWorld, &floorDef);
+    b2Polygon floorBox = b2MakeBox((WIDTH / 2.0f) / PIXELS_PER_METER, 20.0f / PIXELS_PER_METER);
+    b2ShapeDef floorShapeDef = b2DefaultShapeDef();
+    floorShapeDef.material.friction = 0.5f;
+    b2CreatePolygonShape(world->floorBody, &floorShapeDef, &floorBox);
+
+    // Static side walls, matching bounce_on_border's `pos.x < 0` /
+    // `pos.x > WIDTH - width` clamps -- tall thin boxes just outside the
+    // play area so barrels bounce off the screen edges instead of
+    // flying off it.
+    b2BodyDef leftWallDef = b2DefaultBodyDef();
+    leftWallDef.position = PixelTopLeftToB2Center((Vector2){-40, -2000}, 40.0f, 4000.0f);
+    world->leftWallBody = b2CreateBody(world->physicsWorld, &leftWallDef);
+    b2Polygon leftWallBox = b2MakeBox(20.0f / PIXELS_PER_METER, 2000.0f / PIXELS_PER_METER);
+    b2ShapeDef wallShapeDef = b2DefaultShapeDef();
+    wallShapeDef.material.friction = 0.1f;
+    b2CreatePolygonShape(world->leftWallBody, &wallShapeDef, &leftWallBox);
+
+    b2BodyDef rightWallDef = b2DefaultBodyDef();
+    rightWallDef.position = PixelTopLeftToB2Center((Vector2){WIDTH, -2000}, 40.0f, 4000.0f);
+    world->rightWallBody = b2CreateBody(world->physicsWorld, &rightWallDef);
+    b2Polygon rightWallBox = b2MakeBox(20.0f / PIXELS_PER_METER, 2000.0f / PIXELS_PER_METER);
+    b2CreatePolygonShape(world->rightWallBody, &wallShapeDef, &rightWallBox);
+}
+
+void DestroyPhysicsWorld(GameWorld *world) {
+    if (b2World_IsValid(world->physicsWorld)) {
+        b2DestroyWorld(world->physicsWorld);
+    }
 }
 
 void LoadGameAssets(GameWorld *world) {
@@ -128,56 +193,77 @@ static Barrel *FreeBarrelSlot(GameWorld *world) {
 static void SpawnBarrel(GameWorld *world, int maxHealth) {
     Barrel *b = FreeBarrelSlot(world);
     if (!b) { TraceLog(LOG_WARNING, "SpawnBarrel: no free slot!"); return; }
+    // if this slot held a previous barrel whose body wasn't cleaned up
+    // (shouldn't normally happen -- AnimateExplosion destroys it on
+    // finishing -- but guard against a leak regardless)
+    if (b2Body_IsValid(b->bodyId)) {
+        b2DestroyBody(b->bodyId);
+    }
     memset(b, 0, sizeof(Barrel));
     b->active = true;
     b->spawning = true;
     b->pos = (Vector2){(float)GetRandomValue(0, WIDTH), HEIGHT + 50.0f};
-    b->acceleration = (Vector2){0, GRAVITY};
-    b->velocity = (Vector2){(float)(GetRandomValue(0, 100) - 50), -110};
     b->maxHealth = maxHealth;
     b->health = maxHealth;
     b->dead = false;
     world->barrelCount++;
     world->barrelsSpawned++;
+
+    b2BodyDef bodyDef = b2DefaultBodyDef();
+    bodyDef.type = b2_dynamicBody;
+    bodyDef.position = PixelTopLeftToB2Center(b->pos, BARREL_W, BARREL_H);
+    // initial velocity: original used {rand()%100-50, -110} in its own
+    // tick-scaled units; Box2D steps with real (unscaled) dt, so this is
+    // retuned in real m/s to produce a comparable snappy arcade launch,
+    // not a literal unit conversion of the original constant.
+    float vx = (float)(GetRandomValue(0, 100) - 50) * 0.3f;
+    float vy = 9.0f; // upward in Box2D's Y-up world (m/s)
+    bodyDef.linearVelocity = (b2Vec2){ vx, vy };
+    bodyDef.angularDamping = 0.0f;
+    b->bodyId = b2CreateBody(world->physicsWorld, &bodyDef);
+
+    // Barrel collision shape sized to match its on-screen box, minus a
+    // small margin so visually-touching barrels don't feel like they're
+    // colliding early.
+    b2Polygon barrelBox = b2MakeBox((BARREL_W / 2.0f - 2.0f) / PIXELS_PER_METER,
+                                     (BARREL_H / 2.0f - 2.0f) / PIXELS_PER_METER);
+    b2ShapeDef shapeDef = b2DefaultShapeDef();
+    shapeDef.density = 1.0f;
+    shapeDef.material.friction = 0.4f;   // matches FLOOR_FRICTION's spirit
+    shapeDef.material.restitution = 0.15f; // slight bounce, not too bouncy
+    b2CreatePolygonShape(b->bodyId, &shapeDef, &barrelBox);
 }
 
-// ---- barrels (mirrors barrels.c / bounce.c) ----
-static void BounceOnBorder(Barrel *b) {
+// ---- barrels: Box2D now owns gravity, floor contact, wall bounce, and
+// barrel-vs-barrel collision (the original's hand-rolled bounce.c/
+// barrels.c logic had none of that -- overlapping barrels would visually
+// sink into each other instead of settling side by side). This section
+// just syncs each Barrel's cached pixel-space pos/rotation/atFloor from
+// its Box2D body once per frame, after b2World_Step has run.
+#define AT_FLOOR_SPEED_THRESHOLD 0.15f // m/s, "basically not moving" cutoff
+
+static void SyncBarrelFromPhysics(Barrel *b) {
+    if (!b2Body_IsValid(b->bodyId)) return;
+
+    b2Vec2 center = b2Body_GetPosition(b->bodyId);
+    b->pos = B2CenterToPixelTopLeft(center, BARREL_W, BARREL_H);
+
+    b2Rot rot = b2Body_GetRotation(b->bodyId);
+    b->rotation = -b2Rot_GetAngle(rot) * (180.0f / (float)M_PI); // negate: Box2D CCW+ vs screen-space CW+
+
+    b2Vec2 vel = b2Body_GetLinearVelocity(b->bodyId);
+    float speed = sqrtf(vel.x * vel.x + vel.y * vel.y);
+    // "at floor" = resting near the ground line and not actively moving --
+    // used by Gragas's AI to pick a target, matching the original's
+    // at_floor flag semantics (only chase barrels that have landed).
     float floorPos = HEIGHT - BARREL_H - FLOOR_HEIGHT;
-    if (b->pos.x < 0) b->velocity.x = AbsF(b->velocity.x);
-    if (b->pos.x > WIDTH - BARREL_W) b->velocity.x = -AbsF(b->velocity.x);
-    if (b->spawning) return;
-    b->atFloor = false;
-    if (b->pos.y > floorPos) {
-        if (b->velocity.y <= GRAVITY && b->velocity.y > 0) {
-            b->atFloor = true;
-            b->velocity.y = 0;
-            // Unlike the original (which only zeroes velocity and lets
-            // whatever position was already reached stand, occasionally
-            // sinking a few px into the floor on a fast/coarse frame),
-            // explicitly clamp to the floor line here so barrels always
-            // visibly rest on top of the ground instead of underneath it.
-            b->pos.y = floorPos;
-            return;
-        }
-        b->velocity = V2Mul(b->velocity, FLOOR_FRICTION);
-        b->velocity.y = -AbsF(b->velocity.y);
-    }
+    b->atFloor = (!b->spawning) && (b->pos.y >= floorPos - 4.0f) && (speed < AT_FLOOR_SPEED_THRESHOLD);
 }
 
-static void AnimateFlyingBarrel(Barrel *b, float physicsDt) {
-    b->velocity = V2Mul(b->velocity, AIR_FRICTION);
-    Vector2 move = V2Mul(b->acceleration, physicsDt);
-    b->velocity = V2Add(b->velocity, move);
-    BounceOnBorder(b);
-    b->pos = V2Add(b->pos, V2Mul(b->velocity, physicsDt));
-}
-
-static void AnimateBarrel(Barrel *b, float dt, float physicsDt) {
+static void AnimateBarrel(Barrel *b, float dt) {
     b->spawnTimer += dt; // real time, matches sfClock_getElapsedTime > 500000us
     if (b->spawnTimer > 0.5f) b->spawning = false;
-    b->rotation += b->velocity.x / 2.0f;
-    AnimateFlyingBarrel(b, physicsDt);
+    SyncBarrelFromPhysics(b);
 }
 
 #define EXPLOSION_FRAME_TIME 0.035f
@@ -189,12 +275,19 @@ static void AnimateExplosion(Barrel *b, float dt) {
         b->explosionFrame++;
         b->explosionTimer = 0;
         if (b->explosionFrame >= EXPLOSION_FRAMES) {
-            b->active = false; // done exploding, free the slot
+            // done exploding: destroy the Box2D body (it was already
+            // removed from simulation semantics the moment it "died",
+            // but the body itself needs explicit cleanup) and free the slot
+            if (b2Body_IsValid(b->bodyId)) {
+                b2DestroyBody(b->bodyId);
+                b->bodyId = b2_nullBodyId;
+            }
+            b->active = false;
         }
     }
 }
 
-static void UpdateBarrels(GameWorld *world, float dt, float physicsDt) {
+static void UpdateBarrels(GameWorld *world, float dt) {
     int aliveCount = 0;
     for (int i = 0; i < MAX_BARRELS; i++) {
         Barrel *b = &world->barrels[i];
@@ -202,7 +295,7 @@ static void UpdateBarrels(GameWorld *world, float dt, float physicsDt) {
         if (b->dead) {
             AnimateExplosion(b, dt);
         } else {
-            AnimateBarrel(b, dt, physicsDt);
+            AnimateBarrel(b, dt);
         }
         if (b->active) aliveCount++;
     }
@@ -250,6 +343,7 @@ static void GotoBarrel(Gragas *g, GameWorld *world, float dt) {
             target->dead = true;
             target->explosionFrame = 0;
             target->explosionTimer = 0;
+            if (b2Body_IsValid(target->bodyId)) b2Body_Disable(target->bodyId);
             g->score++;
         }
         g->acceleration.x = 0;
@@ -351,13 +445,23 @@ static void BlurTree(GameWorld *world) {
 }
 
 static void BarrelTouched(Barrel *b) {
-    b->velocity.y = -60;
-    b->velocity.x = 15.0f * ((GetRandomValue(0, 1) == 0) ? 1.0f : -1.0f);
+    if (b2Body_IsValid(b->bodyId)) {
+        // Knock the barrel upward with a random horizontal kick, matching
+        // the spirit of the original's `velocity = {-60y-ish kick, random
+        // x}` -- applied as an impulse (mass-independent enough at
+        // density=1) rather than a raw velocity set, since Box2D bodies
+        // don't expose a bare "velocity" field to assign to directly the
+        // way the hand-rolled physics did.
+        float impulseX = 6.0f * ((GetRandomValue(0, 1) == 0) ? 1.0f : -1.0f);
+        float impulseY = 4.0f;
+        b2Body_ApplyLinearImpulseToCenter(b->bodyId, (b2Vec2){impulseX, impulseY}, true);
+    }
     b->health--;
     if (b->health <= 0) {
         b->dead = true;
         b->explosionFrame = 0;
         b->explosionTimer = 0;
+        if (b2Body_IsValid(b->bodyId)) b2Body_Disable(b->bodyId);
     }
 }
 
@@ -446,10 +550,11 @@ void UpdateGameWorld(GameWorld *world, float dt) {
 
     // ENTER: manual debug barrel spawn (1 hp), matches manage_keys()'s
     // `spawn_barrel(g, 1)` on sfKeyEnter -- a real feature of the original,
-    // not a test-only shortcut. Extended here so holding the key spawns
-    // faster and faster the longer it's held, rather than firing only
-    // once per press (per explicit request) -- ramps from one spawn every
-    // 0.35s down to one every 0.05s over 2 seconds of continuous hold.
+    // not a test-only shortcut. Extended so holding the key spawns faster
+    // and faster the longer it's held: starts at one spawn every 0.35s,
+    // ramps down to one every 0.02s (50/s) over 3 seconds of continuous
+    // hold -- noticeably more aggressive acceleration curve + higher cap
+    // per explicit request.
     if (world->state == STATE_PLAYING) {
         if (IsKeyPressed(KEY_ENTER)) {
             SpawnBarrel(world, 1);
@@ -458,12 +563,15 @@ void UpdateGameWorld(GameWorld *world, float dt) {
         } else if (IsKeyDown(KEY_ENTER)) {
             world->enterHoldTime += dt;
             world->enterSpawnAccum += dt;
-            float t = world->enterHoldTime / 2.0f;
+            float t = world->enterHoldTime / 3.0f;
             if (t > 1.0f) t = 1.0f;
-            float interval = 0.35f - t * (0.35f - 0.05f);
-            if (world->enterSpawnAccum > interval) {
+            float interval = 0.35f - t * (0.35f - 0.02f);
+            // fire multiple spawns in one frame if the accumulated time
+            // covers more than one interval (keeps up at very high rates
+            // even if frame time is coarse)
+            while (world->enterSpawnAccum > interval) {
                 SpawnBarrel(world, 1);
-                world->enterSpawnAccum = 0;
+                world->enterSpawnAccum -= interval;
             }
         } else {
             world->enterHoldTime = 0;
@@ -489,7 +597,15 @@ void UpdateGameWorld(GameWorld *world, float dt) {
     }
 
     SpawnRoundTick(world, dt);          // real-time spawn cadence
-    UpdateBarrels(world, dt, physicsDt); // physics uses scaled dt, timers use real dt
+
+    // Step the Box2D world with REAL dt (physics engines integrate in
+    // real time; GAME_TICK scaling only applies to the original's own
+    // hand-rolled formulas, which still apply to Gragas's custom AI
+    // movement below via physicsDt).
+    if (b2World_IsValid(world->physicsWorld)) {
+        b2World_Step(world->physicsWorld, dt, 4);
+    }
+    UpdateBarrels(world, dt);
     AnimateGragas(world, dt, physicsDt);
 }
 

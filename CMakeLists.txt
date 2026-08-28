@@ -13,15 +13,32 @@ set(SOURCES
     src/game.c
 )
 
+# Box2D v3, used for real barrel physics (gravity, floor contact, walls,
+# barrel-vs-barrel collision) -- the original CSFML game's hand-rolled
+# gravity/bounce/friction code had no collision between barrels at all.
+find_package(box2d QUIET)
+if(NOT box2d_FOUND)
+    include(FetchContent)
+    FetchContent_Declare(
+        box2d
+        GIT_REPOSITORY https://github.com/erincatto/box2d.git
+        GIT_TAG v3.1.1
+    )
+    set(BOX2D_SAMPLES OFF CACHE BOOL "" FORCE)
+    set(BOX2D_UNIT_TESTS OFF CACHE BOOL "" FORCE)
+    set(BOX2D_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(box2d)
+endif()
+
 if(EMSCRIPTEN)
     add_executable(my_hunter ${SOURCES})
-    target_link_libraries(my_hunter raylib)
+    target_link_libraries(my_hunter raylib box2d)
 
     set(CMAKE_EXECUTABLE_SUFFIX ".html")
     target_link_options(my_hunter PRIVATE
         "-sUSE_GLFW=3"
         "-sASYNCIFY"
-        "-sTOTAL_MEMORY=67108864"
+        "-sTOTAL_MEMORY=134217728"
         "-sFORCE_FILESYSTEM=1"
         "--shell-file=${CMAKE_SOURCE_DIR}/web/shell.html"
         "--preload-file=${CMAKE_SOURCE_DIR}/assets@assets"
@@ -39,7 +56,7 @@ else()
     endif()
 
     add_executable(my_hunter ${SOURCES})
-    target_link_libraries(my_hunter raylib)
+    target_link_libraries(my_hunter raylib box2d)
 
     if(APPLE)
         target_link_libraries(my_hunter "-framework IOKit" "-framework Cocoa" "-framework OpenGL")

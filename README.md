@@ -52,6 +52,18 @@ reproduced 1:1 in `src/game.c`:
   floorPos`) instead of potentially resting a few px into the ground on
   a fast/coarse physics step, which the original didn't explicitly
   guard against.
+- **Real physics via Box2D v3**: barrel gravity/floor-contact/wall-bounce
+  is now handled by an actual Box2D world instead of hand-rolled
+  velocity/friction math. The original had zero collision between
+  barrels, so overlapping ones would visually sink into or pass through
+  each other instead of settling next to one another ("barrels aren't
+  fixed to the ground") -- real rigid-body collision fixes that as a
+  side effect. Gragas's AI/movement stays on the original's custom
+  logic (Box2D is only used for barrel dynamics, not the character
+  controller).
+- Holding **ENTER** now ramps up to 50 spawns/second over 3 seconds of
+  continuous hold (was 20/s over 2s), and the barrel pool was raised
+  from 128 to 800 slots so spamming ENTER doesn't silently hit a cap.
 
 **Not yet ported:** nothing outstanding on the assets/mechanics front —
 the real sprite sheets (`barrel.png`, `sumos.png`, `explosion.png`,

@@ -2,6 +2,7 @@
 #define GAME_H
 
 #include "raylib.h"
+#include "box2d/box2d.h"
 
 // Constants mirrored from the original CSFML MyHunter's my.h
 #define WIDTH 1152
@@ -23,7 +24,16 @@
 // slower than intended.
 #define GAME_TICK 20.0f
 
-#define MAX_BARRELS 128
+#define MAX_BARRELS 800
+
+// Box2D integration: the original's hand-rolled gravity/bounce/friction
+// code had no barrel-vs-barrel collision at all, so overlapping barrels
+// would visually sink into / pass through each other instead of settling
+// side by side ("not fixed to the ground"). Real physics now handles
+// gravity, floor contact, walls, and barrel-vs-barrel collision.
+// Box2D works in meters (Y-up); the game logic stays in pixels (Y-down).
+// All conversion happens at the Barrel<->b2Body boundary.
+#define PIXELS_PER_METER 50.0f
 
 // Sprite-sheet frame layout, mirrored exactly from my.h
 #define EXPLOSION_WIDTH 50
@@ -42,12 +52,11 @@ typedef struct {
     bool active;
     bool dead;          // popped, playing explosion animation
     bool spawning;       // brief invuln/color-fade window after spawn
-    bool atFloor;
 
-    Vector2 pos;          // top-left, mirrors sfSprite position semantics
-    Vector2 velocity;
-    Vector2 acceleration;
-    float rotation;
+    b2BodyId bodyId;      // Box2D dynamic body -- owns position/velocity while alive
+    Vector2 pos;           // cached pixel-space position, refreshed from Box2D each frame
+    float rotation;        // cached rotation (degrees), refreshed from Box2D each frame
+    bool atFloor;           // derived each frame from Box2D velocity (settled = "at floor")
 
     int maxHealth;
     int health;
@@ -119,9 +128,16 @@ typedef struct {
     Vector2 mousePos;
 
     Assets assets;
+
+    b2WorldId physicsWorld;
+    b2BodyId floorBody;
+    b2BodyId leftWallBody;
+    b2BodyId rightWallBody;
 } GameWorld;
 
 void InitGameWorld(GameWorld *world);
+void InitPhysicsWorld(GameWorld *world);
+void DestroyPhysicsWorld(GameWorld *world);
 void LoadGameAssets(GameWorld *world);
 void UnloadGameAssets(GameWorld *world);
 void UpdateGameWorld(GameWorld *world, float dt);

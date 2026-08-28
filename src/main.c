@@ -32,6 +32,7 @@ int main(void) {
 #endif
 
     UnloadGameAssets(&world);
+    DestroyPhysicsWorld(&world);
     CloseWindow();
     return 0;
 }

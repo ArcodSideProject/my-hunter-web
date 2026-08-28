@@ -37,6 +37,22 @@ static void draw_text_int(textint_t *t, Font font, bool hasFont)
         DrawText(buf, (int)t->pos.x, (int)t->pos.y, 32, WHITE);
 }
 
+static void draw_enter_hint(game_t *g)
+{
+    // Explicit request: a visible hint that holding ENTER spawns more
+    // barrels. Placed bottom-left, small and unobtrusive, only during
+    // actual gameplay (not the menu or the game-over screen, which
+    // have their own separate messaging).
+    const char *hint = "Hold ENTER to spawn more barrels";
+    int fontSize = 20;
+    Vector2 pos = {16, HEIGHT - 32};
+    if (g->hasFont) {
+        DrawTextEx(g->font, hint, pos, fontSize, 1, (Color){255, 255, 255, 200});
+    } else {
+        DrawText(hint, (int)pos.x, (int)pos.y, fontSize, (Color){255, 255, 255, 200});
+    }
+}
+
 void draw_on_screen_background_and_gameplay(game_t *g)
 {
     draw_background(g->bg);
@@ -52,6 +68,8 @@ void draw_on_screen_background_and_gameplay(game_t *g)
     }
     draw_text_int(g->score, g->font, g->hasFont);
     draw_text_int(g->round, g->font, g->hasFont);
+    if (!g->in_menu && !g->game_over)
+        draw_enter_hint(g);
 }
 
 void draw_on_screen_foreground(game_t *g)

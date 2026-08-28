@@ -6,17 +6,30 @@
 
 void kill_barrel(barrel_t *barrel)
 {
-    // Anchor the explosion visually at the barrel's last real CENTER
-    // point before switching textures/scale/origin -- the origin set in
+    // Refresh rect from the sprite's ACTUAL current position first --
+    // barrel->rect is only updated once per frame at the top of
+    // animate_barrel() in barrels.c, BEFORE that same frame's movement
+    // is applied. By the time kill_barrel() runs later in the frame
+    // (via goto_barrel.c's touching_barrel, or here via
+    // remove_dead_barrels on a barrel that died from a player click
+    // the previous frame), barrel->rect can be one full frame of
+    // movement stale -- at the velocities barrels reach right after a
+    // click impulse (velocity.y=-60 etc), that's tens of pixels of
+    // real, visible gap between the barrel's actual position and
+    // where the explosion anchors. This is the real cause of barrels
+    // "exploding somewhere else, like physics were still being
+    // calculated". Refreshing here ensures the explosion always
+    // anchors to wherever the sprite genuinely is right now.
+    barrel->rect = sprite_get_global_bounds(&barrel->sp);
+
+    // Anchor the explosion visually at the barrel's real CENTER point
+    // before switching textures/scale/origin -- the origin set in
     // adapt_origin_to_rotate() was computed against the BARREL texture's
     // own dimensions/scale (barrel is 22x28 native * 3x scale), which
     // becomes meaningless once the sprite switches to the much larger
     // explosion sheet (50x51 native) at a different scale (1.9x); left
     // as-is, that stale origin offset the explosion's apparent position
-    // by tens of pixels from where the barrel actually died, adding to
-    // the "explosion looks like it happened far away" effect (the main
-    // cause of which was goto_barrel.c's touching_barrel() coarse
-    // hit-test, fixed separately).
+    // by tens of pixels from where the barrel actually died.
     float centerX = barrel->rect.x + barrel->rect.width / 2.0f;
     float centerY = barrel->rect.y + barrel->rect.height / 2.0f;
     barrel->health = 1;

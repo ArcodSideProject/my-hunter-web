@@ -24,6 +24,7 @@ if(EMSCRIPTEN)
         "-sTOTAL_MEMORY=67108864"
         "-sFORCE_FILESYSTEM=1"
         "--shell-file=${CMAKE_SOURCE_DIR}/web/shell.html"
+        "--preload-file=${CMAKE_SOURCE_DIR}/assets@assets"
     )
 else()
     find_package(raylib QUIET)
@@ -43,4 +44,11 @@ else()
     if(APPLE)
         target_link_libraries(my_hunter "-framework IOKit" "-framework Cocoa" "-framework OpenGL")
     endif()
+
+    # copy assets next to the built binary so the relative "assets/..."
+    # paths used in LoadGameAssets() resolve at runtime
+    add_custom_command(TARGET my_hunter POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_SOURCE_DIR}/assets $<TARGET_FILE_DIR:my_hunter>/assets
+    )
 endif()

@@ -17,6 +17,18 @@
 
 #define MAX_BARRELS 128
 
+// Sprite-sheet frame layout, mirrored exactly from my.h
+#define EXPLOSION_WIDTH 50
+#define EXPLOSION_HEIGHT 51
+#define SQUATTING_GRAGAS_WIDTH 50
+#define SQUATTING_GRAGAS_HEIGHT 44
+#define STANDING_GRAGAS_WIDTH 66
+#define STANDING_GRAGAS_HEIGHT 62
+#define STANDING_GRAGAS_HEIGHT_OFFSET 46
+
+#define TREE_OFFSET_X 173
+#define TREE_OFFSET_Y 82
+
 typedef struct {
     bool active;
     bool dead;          // popped, playing explosion animation
@@ -54,6 +66,7 @@ typedef struct {
     int spawnAnimation;  // 0..3, mirrors the original's spawn animation steps
     float spawnAnimTimer;
     float walkAnimTimer;
+    int walkFrame;        // 0..2, mirrors rect_anim.left stepping through 3 squat frames
     int score;
 } Gragas;
 
@@ -62,6 +75,16 @@ typedef enum {
     STATE_PLAYING,
     STATE_GAME_OVER
 } GameState;
+
+typedef struct {
+    Texture2D barrel;
+    Texture2D sumos;       // Gragas sprite sheet (squatting + standing frames)
+    Texture2D explosion;
+    Texture2D startButton;
+    Texture2D sky, clouds, mountain, farWoods, tiles, tree, frontGrass;
+    Font font;
+    bool loaded;
+} Assets;
 
 typedef struct {
     GameState state;
@@ -79,9 +102,13 @@ typedef struct {
     float cloudsSpeed;
 
     Vector2 mousePos;
+
+    Assets assets;
 } GameWorld;
 
 void InitGameWorld(GameWorld *world);
+void LoadGameAssets(GameWorld *world);
+void UnloadGameAssets(GameWorld *world);
 void UpdateGameWorld(GameWorld *world, float dt);
 void DrawGameWorld(GameWorld *world);
 

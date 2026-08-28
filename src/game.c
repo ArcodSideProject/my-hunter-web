@@ -47,10 +47,50 @@ static int RoundSettings(int round, float *spawnRate, int *barrelHealth,
 }
 
 void InitGameWorld(GameWorld *world) {
+    Assets savedAssets = world->assets; // preserve loaded textures across resets
     memset(world, 0, sizeof(GameWorld));
+    world->assets = savedAssets;
     world->state = STATE_MENU;
     world->round = 0;
     world->cloudsSpeed = 20.0f;
+}
+
+void LoadGameAssets(GameWorld *world) {
+    Assets *a = &world->assets;
+    a->barrel = LoadTexture("assets/barrel.png");
+    a->sumos = LoadTexture("assets/sumos.png");
+    a->explosion = LoadTexture("assets/explosion.png");
+    a->startButton = LoadTexture("assets/start_button.png");
+    a->sky = LoadTexture("assets/background/Sky.png");
+    a->clouds = LoadTexture("assets/background/Clouds.png");
+    a->mountain = LoadTexture("assets/background/Mountain.png");
+    a->farWoods = LoadTexture("assets/background/Far_woods.png");
+    a->tiles = LoadTexture("assets/background/Tiles.png");
+    a->tree = LoadTexture("assets/background/Tree.png");
+    a->frontGrass = LoadTexture("assets/background/Front_grass.png");
+    a->font = LoadFontEx("assets/fonts/upheavtt.ttf", 48, NULL, 0);
+    a->loaded = (a->barrel.id != 0 && a->sumos.id != 0);
+    if (!a->loaded) {
+        TraceLog(LOG_WARNING, "LoadGameAssets: one or more textures failed to load; "
+                 "falling back to placeholder shapes");
+    }
+}
+
+void UnloadGameAssets(GameWorld *world) {
+    Assets *a = &world->assets;
+    if (!a->loaded) return;
+    UnloadTexture(a->barrel);
+    UnloadTexture(a->sumos);
+    UnloadTexture(a->explosion);
+    UnloadTexture(a->startButton);
+    UnloadTexture(a->sky);
+    UnloadTexture(a->clouds);
+    UnloadTexture(a->mountain);
+    UnloadTexture(a->farWoods);
+    UnloadTexture(a->tiles);
+    UnloadTexture(a->tree);
+    UnloadTexture(a->frontGrass);
+    UnloadFont(a->font);
 }
 
 static void SpawnGragas(GameWorld *world) {
@@ -75,7 +115,7 @@ static Barrel *FreeBarrelSlot(GameWorld *world) {
 
 static void SpawnBarrel(GameWorld *world, int maxHealth) {
     Barrel *b = FreeBarrelSlot(world);
-    if (!b) return;
+    if (!b) { TraceLog(LOG_WARNING, "SpawnBarrel: no free slot!"); return; }
     memset(b, 0, sizeof(Barrel));
     b->active = true;
     b->spawning = true;
@@ -87,6 +127,8 @@ static void SpawnBarrel(GameWorld *world, int maxHealth) {
     b->dead = false;
     world->barrelCount++;
     world->barrelsSpawned++;
+    TraceLog(LOG_INFO, "SpawnBarrel: pos=(%.1f,%.1f) count=%d spawned=%d",
+             b->pos.x, b->pos.y, world->barrelCount, world->barrelsSpawned);
 }
 
 // ---- barrels (mirrors barrels.c / bounce.c) ----
@@ -167,8 +209,15 @@ static void GotoBarrel(Gragas *g, GameWorld *world, float dt) {
     Barrel *target = NearestLiveFloorBarrel(world);
     if (!target) return;
 
+    // walking_animation: step through 3 squat frames, cadence tied to
+    // horizontal speed (faster walk = faster frame cycling), same formula
+    // as the original's `0.05 + 1/|velocity.x|` threshold.
     g->walkAnimTimer += dt;
-    (void)g->walkAnimTimer; // visual-only in the port; kept for parity/logging
+    float threshold = 0.05f + (1.0f / (AbsF(g->velocity.x) > 0.01f ? AbsF(g->velocity.x) : 0.01f));
+    if (g->walkAnimTimer > threshold) {
+        g->walkFrame = (g->walkFrame + 1) % 3;
+        g->walkAnimTimer = 0;
+    }
 
     if (g->pos.x < target->pos.x) g->acceleration.x = 20;
     if (g->pos.x > target->pos.x) g->acceleration.x -= 20;
@@ -262,9 +311,12 @@ static void HandleClick(GameWorld *world) {
     if (world->state == STATE_MENU) {
         // "start button" region -- centered box, matches menu draw below
         Rectangle startBtn = {WIDTH / 2.0f - 100, HEIGHT / 2.0f - 30, 200, 60};
+        TraceLog(LOG_INFO, "HandleClick: menu click at (%.1f,%.1f), btn=(%.1f,%.1f,%.1f,%.1f)",
+                 m.x, m.y, startBtn.x, startBtn.y, startBtn.width, startBtn.height);
         if (CheckCollisionPointRec(m, startBtn)) {
             world->round = 1;
             world->state = STATE_PLAYING;
+            TraceLog(LOG_INFO, "HandleClick: START pressed, state=PLAYING round=1");
         }
         return;
     }
@@ -327,6 +379,15 @@ void UpdateGameWorld(GameWorld *world, float dt) {
 
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) HandleClick(world);
 
+    // debug/testing convenience: SPACE also starts the game from the menu
+    // (keyboard input is far more reliable to script/automate than
+    // synthetic mouse clicks under a window-manager-less test display)
+    if (world->state == STATE_MENU && IsKeyPressed(KEY_SPACE)) {
+        world->round = 1;
+        world->state = STATE_PLAYING;
+        TraceLog(LOG_INFO, "UpdateGameWorld: SPACE pressed, state=PLAYING round=1");
+    }
+
     if (world->state == STATE_MENU) return;
 
     if (world->state == STATE_GAME_OVER) {
@@ -343,95 +404,190 @@ void UpdateGameWorld(GameWorld *world, float dt) {
 
 // ---- drawing ----
 static void DrawBackground(GameWorld *world) {
-    ClearBackground((Color){135, 206, 235, 255}); // sky
-    // clouds (simple scrolling ellipses standing in for the sprite)
-    for (int i = 0; i < 4; i++) {
-        float x = fmodf(world->cloudsX + i * 320.0f, WIDTH + 200) - 100;
-        DrawEllipse((int)x, 90 + (i % 2) * 40, 60, 24, (Color){255, 255, 255, 200});
-    }
-    // distant mountains
-    DrawTriangle((Vector2){0, HEIGHT - FLOOR_HEIGHT - 220},
-                 (Vector2){WIDTH * 0.3f, HEIGHT - FLOOR_HEIGHT - 60},
-                 (Vector2){WIDTH * 0.6f, HEIGHT - FLOOR_HEIGHT - 220},
-                 (Color){120, 130, 150, 255});
-    // ground
-    DrawRectangle(0, HEIGHT - FLOOR_HEIGHT, WIDTH, FLOOR_HEIGHT, (Color){90, 140, 60, 255});
-}
-
-static void DrawBarrel(Barrel *b) {
-    Rectangle r = BarrelRect(b);
-    Vector2 center = {r.x + r.width / 2, r.y + r.height / 2};
-
-    if (b->dead) {
-        float t = (float)b->explosionFrame / EXPLOSION_FRAMES;
-        Color c = Fade(ORANGE, 1.0f - t);
-        DrawCircleV(center, r.width / 2 * (1.0f + t), c);
+    Assets *a = &world->assets;
+    if (!a->loaded) {
+        ClearBackground((Color){135, 206, 235, 255});
+        for (int i = 0; i < 4; i++) {
+            float x = fmodf(world->cloudsX + i * 320.0f, WIDTH + 200) - 100;
+            DrawEllipse((int)x, 90 + (i % 2) * 40, 60, 24, (Color){255, 255, 255, 200});
+        }
+        DrawTriangle((Vector2){0, HEIGHT - FLOOR_HEIGHT - 220},
+                     (Vector2){WIDTH * 0.3f, HEIGHT - FLOOR_HEIGHT - 60},
+                     (Vector2){WIDTH * 0.6f, HEIGHT - FLOOR_HEIGHT - 220},
+                     (Color){120, 130, 150, 255});
+        DrawRectangle(0, HEIGHT - FLOOR_HEIGHT, WIDTH, FLOOR_HEIGHT, (Color){90, 140, 60, 255});
         return;
     }
 
-    unsigned char healthTint = (unsigned char)(255 * b->health / (b->maxHealth > 0 ? b->maxHealth : 1));
-    Color c = b->spawning ? (Color){120, 120, 120, 220}
-                           : (Color){255, healthTint, healthTint, 255};
+    // Every background layer is a 384x224 source scaled up 3x to fill the
+    // 1152x672 window, exactly matching create_background.c's
+    // `resize = WIDTH/384, HEIGHT/224` (== 3,3).
+    Rectangle dst = {0, 0, WIDTH, HEIGHT};
+    DrawTexturePro(a->sky, (Rectangle){0, 0, (float)a->sky.width, (float)a->sky.height},
+                    dst, (Vector2){0, 0}, 0, WHITE);
 
-    DrawCircleV((Vector2){center.x, r.y + r.height - 6}, r.width / 2.2f, (Color){0, 0, 0, 60}); // shadow
-    Rectangle dst = {center.x, center.y, r.width, r.height};
-    Vector2 origin = {r.width / 2, r.height / 2};
-    // simple rotated rounded rect standing in for the barrel sprite
-    DrawRectanglePro(dst, origin, b->rotation, c);
-    DrawRectangleLinesEx((Rectangle){r.x, r.y, r.width, r.height}, 2, (Color){80, 50, 20, 255});
+    // clouds scroll horizontally and wrap, matching move_clouds()
+    float cx = fmodf(world->cloudsX, WIDTH);
+    Rectangle cloudsSrc = {0, 0, (float)a->clouds.width, (float)a->clouds.height};
+    DrawTexturePro(a->clouds, cloudsSrc, (Rectangle){cx, 0, WIDTH, HEIGHT}, (Vector2){0, 0}, 0, WHITE);
+    DrawTexturePro(a->clouds, cloudsSrc, (Rectangle){cx - WIDTH, 0, WIDTH, HEIGHT}, (Vector2){0, 0}, 0, WHITE);
+
+    DrawTexturePro(a->mountain, (Rectangle){0, 0, (float)a->mountain.width, (float)a->mountain.height},
+                    dst, (Vector2){0, 0}, 0, WHITE);
+    DrawTexturePro(a->farWoods, (Rectangle){0, 0, (float)a->farWoods.width, (float)a->farWoods.height},
+                    dst, (Vector2){0, 0}, 0, WHITE);
+
+    // tree, offset per TREE_OFFSET_X/Y * scale, matching create_background.c
+    float scaleX = WIDTH / 384.0f, scaleY = HEIGHT / 224.0f;
+    DrawTextureEx(a->tree, (Vector2){TREE_OFFSET_X * scaleX, TREE_OFFSET_Y * scaleY}, 0, scaleX, WHITE);
+
+    DrawTexturePro(a->tiles, (Rectangle){0, 0, (float)a->tiles.width, (float)a->tiles.height},
+                    dst, (Vector2){0, 0}, 0, WHITE);
+    DrawTexturePro(a->frontGrass, (Rectangle){0, 0, (float)a->frontGrass.width, (float)a->frontGrass.height},
+                    dst, (Vector2){0, 0}, 0, WHITE);
 }
 
-static void DrawGragas(Gragas *g) {
+static void DrawBarrel(GameWorld *world, Barrel *b) {
+    Assets *a = &world->assets;
+    Rectangle r = BarrelRect(b);
+    Vector2 center = {r.x + r.width / 2, r.y + r.height / 2};
+
+    if (!a->loaded) {
+        if (b->dead) {
+            float t = (float)b->explosionFrame / EXPLOSION_FRAMES;
+            DrawCircleV(center, r.width / 2 * (1.0f + t), Fade(ORANGE, 1.0f - t));
+            return;
+        }
+        unsigned char healthTint = (unsigned char)(255 * b->health / (b->maxHealth > 0 ? b->maxHealth : 1));
+        Color c = b->spawning ? (Color){120, 120, 120, 220} : (Color){255, healthTint, healthTint, 255};
+        DrawCircleV((Vector2){center.x, r.y + r.height - 6}, r.width / 2.2f, (Color){0, 0, 0, 60});
+        Rectangle dst = {center.x, center.y, r.width, r.height};
+        Vector2 origin = {r.width / 2, r.height / 2};
+        DrawRectanglePro(dst, origin, b->rotation, c);
+        DrawRectangleLinesEx((Rectangle){r.x, r.y, r.width, r.height}, 2, (Color){80, 50, 20, 255});
+        return;
+    }
+
+    // shadow, matching calculate_barrel_shadow's simple ellipse under the barrel
+    DrawEllipse((int)center.x, (int)(r.y + r.height - 4), (int)(r.width / 2.2f), 6,
+                (Color){0, 0, 0, 70});
+
+    if (b->dead) {
+        // explosion.png is a horizontal strip of EXPLOSION_WIDTH x EXPLOSION_HEIGHT
+        // frames, stepped every ~0.035s (animate_explosion in the original)
+        int frame = b->explosionFrame;
+        int maxFrame = (a->explosion.width / EXPLOSION_WIDTH) - 1;
+        if (frame > maxFrame) frame = maxFrame;
+        Rectangle src = {(float)(frame * EXPLOSION_WIDTH), 0, EXPLOSION_WIDTH, EXPLOSION_HEIGHT};
+        Rectangle dst = {center.x, center.y, EXPLOSION_WIDTH * 1.5f, EXPLOSION_HEIGHT * 1.5f};
+        Vector2 origin = {EXPLOSION_WIDTH * 1.5f / 2, EXPLOSION_HEIGHT * 1.5f / 2};
+        DrawTexturePro(a->explosion, src, dst, origin, 0, WHITE);
+        return;
+    }
+
+    // health tint: white->red as health drops, matching animate_barrels'
+    // sfColor_fromRGB(255, health*255/maxHealth, health*255/maxHealth)
+    unsigned char healthTint = (unsigned char)(255 * b->health / (b->maxHealth > 0 ? b->maxHealth : 1));
+    Color tint = b->spawning ? (Color){120, 120, 120, 220} : (Color){255, healthTint, healthTint, 255};
+
+    Rectangle src = {0, 0, (float)a->barrel.width, (float)a->barrel.height};
+    Rectangle dst = {center.x, center.y, r.width, r.height};
+    Vector2 origin = {r.width / 2, r.height / 2};
+    DrawTexturePro(a->barrel, src, dst, origin, b->rotation, tint);
+}
+
+static void DrawGragas(GameWorld *world) {
+    Gragas *g = &world->gragas;
     if (!g->exists) return;
+    Assets *a = &world->assets;
     Rectangle r = GragasRect(g);
-    Color body = ORANGE;
-    if (g->spawning || g->spawnAnimation) body = Fade(ORANGE, 0.6f);
+
+    if (!a->loaded) {
+        Color body = (g->spawning || g->spawnAnimation) ? Fade(ORANGE, 0.6f) : ORANGE;
+        DrawEllipse((int)(r.x + r.width / 2), (int)(HEIGHT - G_FLOOR_HEIGHT - 4),
+                    (int)(r.width / 2.5f), 8, (Color){0, 0, 0, 60});
+        DrawRectangleRounded(r, 0.3f, 8, body);
+        DrawText("G", (int)(r.x + r.width / 2 - 8), (int)(r.y + r.height / 2 - 12), 24, WHITE);
+        return;
+    }
 
     DrawEllipse((int)(r.x + r.width / 2), (int)(HEIGHT - G_FLOOR_HEIGHT - 4),
-                (int)(r.width / 2.5f), 8, (Color){0, 0, 0, 60}); // shadow
-    DrawRectangleRounded(r, 0.3f, 8, body);
-    DrawText("G", (int)(r.x + r.width / 2 - 8), (int)(r.y + r.height / 2 - 12), 24, WHITE);
+                (int)(r.width / 2.5f), 8, (Color){0, 0, 0, 60});
+
+    // sumos.png layout mirrors rect_anim in the original: standing/spawn
+    // frames use STANDING_GRAGAS_WIDTH/HEIGHT at a Y offset, squatting/walk
+    // frames use SQUATTING_GRAGAS_WIDTH/HEIGHT starting at Y=0.
+    Rectangle src;
+    if (g->spawning || g->spawnAnimation) {
+        int frame = g->spawnAnimation; // 0..3 walks through the spawn strip
+        src = (Rectangle){(float)(frame * (STANDING_GRAGAS_WIDTH + 2)),
+                            STANDING_GRAGAS_HEIGHT_OFFSET,
+                            STANDING_GRAGAS_WIDTH, STANDING_GRAGAS_HEIGHT};
+    } else if (g->jumping) {
+        src = (Rectangle){210, 0, SQUATTING_GRAGAS_WIDTH, SQUATTING_GRAGAS_HEIGHT};
+    } else {
+        src = (Rectangle){(float)(g->walkFrame * (SQUATTING_GRAGAS_WIDTH + 2)), 0,
+                            SQUATTING_GRAGAS_WIDTH, SQUATTING_GRAGAS_HEIGHT};
+    }
+    // clamp source rect inside the actual texture bounds defensively --
+    // sumos.png is a community-sourced sheet and frame counts can vary
+    // slightly from the original's hardcoded offsets.
+    if (src.x + src.width > a->sumos.width) src.x = 0;
+    if (src.y + src.height > a->sumos.height) src.y = 0;
+
+    Rectangle dst = {r.x, r.y, r.width, r.height};
+    DrawTexturePro(a->sumos, src, dst, (Vector2){0, 0}, 0, WHITE);
 }
 
 static void DrawHUD(GameWorld *world) {
-    DrawText(TextFormat("Round: %d/5", world->round), 20, 15, 22, BLACK);
-    DrawText(TextFormat("Barrels spawned: %d/70", world->barrelsSpawned), 20, 42, 18, DARKGRAY);
+    Assets *a = &world->assets;
+    Font f = a->loaded ? a->font : GetFontDefault();
+    DrawTextEx(f, TextFormat("Round: %d/5", world->round), (Vector2){20, 15}, 22, 1, BLACK);
+    DrawTextEx(f, TextFormat("Barrels spawned: %d/70", world->barrelsSpawned), (Vector2){20, 42}, 18, 1, DARKGRAY);
     if (world->gragas.exists) {
-        DrawText(TextFormat("Gragas's score: %d", world->gragas.score), 20, 66, 20, MAROON);
+        DrawTextEx(f, TextFormat("Gragas's score: %d", world->gragas.score), (Vector2){20, 66}, 20, 1, MAROON);
     }
 }
 
 void DrawGameWorld(GameWorld *world) {
     DrawBackground(world);
+    Assets *a = &world->assets;
+    Font f = a->loaded ? a->font : GetFontDefault();
 
     if (world->state == STATE_MENU) {
         const char *title = "MY HUNTER";
-        int tw = MeasureText(title, 56);
-        DrawText(title, WIDTH / 2 - tw / 2, HEIGHT / 2 - 140, 56, (Color){60, 30, 10, 255});
+        Vector2 tsize = MeasureTextEx(f, title, 56, 1);
+        DrawTextEx(f, title, (Vector2){WIDTH / 2 - tsize.x / 2, HEIGHT / 2 - 140}, 56, 1,
+                   (Color){60, 30, 10, 255});
 
         Rectangle startBtn = {WIDTH / 2.0f - 100, HEIGHT / 2.0f - 30, 200, 60};
-        DrawRectangleRounded(startBtn, 0.3f, 8, (Color){200, 80, 40, 255});
-        const char *label = "START";
-        int lw = MeasureText(label, 28);
-        DrawText(label, (int)(startBtn.x + startBtn.width / 2 - lw / 2),
-                  (int)(startBtn.y + startBtn.height / 2 - 14), 28, WHITE);
+        if (a->loaded && a->startButton.id != 0) {
+            Rectangle src = {0, 0, (float)a->startButton.width, (float)a->startButton.height};
+            DrawTexturePro(a->startButton, src, startBtn, (Vector2){0, 0}, 0, WHITE);
+        } else {
+            DrawRectangleRounded(startBtn, 0.3f, 8, (Color){200, 80, 40, 255});
+            const char *label = "START";
+            Vector2 lsize = MeasureTextEx(f, label, 28, 1);
+            DrawTextEx(f, label, (Vector2){startBtn.x + startBtn.width / 2 - lsize.x / 2,
+                       startBtn.y + startBtn.height / 2 - 14}, 28, 1, WHITE);
+        }
         return;
     }
 
     for (int i = 0; i < MAX_BARRELS; i++) {
-        if (world->barrels[i].active) DrawBarrel(&world->barrels[i]);
+        if (world->barrels[i].active) DrawBarrel(world, &world->barrels[i]);
     }
-    DrawGragas(&world->gragas);
+    DrawGragas(world);
     DrawHUD(world);
 
     if (world->state == STATE_GAME_OVER) {
         DrawRectangle(0, 0, WIDTH, HEIGHT, (Color){0, 0, 0, 150});
         const char *title = "CLEARED!";
-        int tw = MeasureText(title, 48);
-        DrawText(title, WIDTH / 2 - tw / 2, HEIGHT / 2 - 60, 48, GOLD);
+        Vector2 tsize = MeasureTextEx(f, title, 48, 1);
+        DrawTextEx(f, title, (Vector2){WIDTH / 2 - tsize.x / 2, HEIGHT / 2 - 60}, 48, 1, GOLD);
         const char *sub = TextFormat("Gragas's final score: %d", world->gragas.score);
-        int sw = MeasureText(sub, 22);
-        DrawText(sub, WIDTH / 2 - sw / 2, HEIGHT / 2, 22, RAYWHITE);
+        Vector2 ssize = MeasureTextEx(f, sub, 22, 1);
+        DrawTextEx(f, sub, (Vector2){WIDTH / 2 - ssize.x / 2, HEIGHT / 2}, 22, 1, RAYWHITE);
         const char *hint = "Press SPACE to play again";
         int hw = MeasureText(hint, 18);
         DrawText(hint, WIDTH / 2 - hw / 2, HEIGHT / 2 + 40, 18, LIGHTGRAY);

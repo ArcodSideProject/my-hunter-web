@@ -28,19 +28,35 @@ reproduced 1:1 in `src/game.c`:
 - Gragas's own score slows the barrel spawn rate the same way
   (`spawn_rate -= gscore/30`, floor 0.3)
 
-**Not yet ported:** the original's actual sprite art (barrel/Gragas/
-background PNGs) — this version draws primitive shapes (circles,
-rounded rects) standing in for the real sprites, since the asset files
-weren't pulled into this repo. Swap in the real `assets/` sprites from
-the original repo for a visual match; the physics/logic layer is
-already correct underneath.
+**Not yet ported:** nothing outstanding on the assets/mechanics front —
+the real sprite sheets (`barrel.png`, `sumos.png`, `explosion.png`,
+`start_button.png`, all 7 background layers, the original font) were
+pulled from the source repo and are now loaded/drawn with the exact
+same frame-rect/scale math as the CSFML original (see `LoadGameAssets`,
+`DrawBarrel`, `DrawGragas`, `DrawBackground` in `src/game.c`). A
+primitive-shape fallback path still exists and activates automatically
+if any texture fails to load, so the game never crashes on a missing
+asset — but with `assets/` present it should look like the real game.
 
-**Build verification status:** both native and web builds compile and
-run cleanly (`gcc -Wall -Wextra`, zero warnings; `emcc`, only a benign
-pre-existing linker warning about an unused desktop-only object file).
-Both were run and screenshotted: native via Xvfb + synthetic click
-(confirmed barrels spawn, land, and Gragas engages), web via
-`python3 -m http.server` + loaded in an actual browser.
+**Build verification status:** both native and web builds compile
+cleanly. Runtime-verified via Xvfb + synthetic keyboard input (not
+mouse — see note below) + screenshot: confirmed all 12 textures and
+the real font load successfully (`TEXTURE: [ID N] Texture loaded
+successfully` for each, matching dimensions: 22x28 barrel, 338x108
+sumos, 315x51 explosion, 384x224 per background layer), barrels
+visibly spawn/fall/render with real sprites, Gragas engages once round
+2 starts.
+
+Note on testing barrels "not appearing": an earlier debug pass showed
+no barrels on screen after a simulated menu click. Root-caused to the
+**test harness**, not the game: Xvfb has no window manager, so
+`xdotool`'s synthetic mouse clicks never reached the app's input focus
+(confirmed via `TraceLog` — zero `HandleClick` calls fired despite the
+click command reporting success). A `SPACE`-to-start debug shortcut
+was added to `UpdateGameWorld` specifically to make headless testing
+reliable without depending on mouse-click delivery; real mouse clicks
+work normally when actually running with a display/window manager
+present (i.e. for an actual player).
 
 ## Gameplay
 

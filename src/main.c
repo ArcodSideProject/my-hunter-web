@@ -21,6 +21,7 @@ int main(void) {
     SetTargetFPS(60);
 
     InitGameWorld(&world);
+    LoadGameAssets(&world);
 
 #if defined(PLATFORM_WEB)
     emscripten_set_main_loop(UpdateDrawFrame, 0, 1);
@@ -30,6 +31,7 @@ int main(void) {
     }
 #endif
 
+    UnloadGameAssets(&world);
     CloseWindow();
     return 0;
 }

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en-us">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title>My Hunter — raylib web edition</title>
+    <style>
+        body { margin: 0; background: #101018; display: flex; align-items: center;
+               justify-content: center; height: 100vh; font-family: sans-serif; }
+        #canvas { border: 2px solid #333; background: black; image-rendering: pixelated; }
+        #loading { color: white; position: absolute; }
+    </style>
+</head>
+<body>
+    <div id="loading">Loading...</div>
+    <canvas id="canvas" oncontextmenu="event.preventDefault()"></canvas>
+    <script type='text/javascript'>
+        var Module = {
+            print: (function() { return function(text) { console.log(text); }; })(),
+            printErr: function(text) { console.error(text); },
+            canvas: (function() {
+                var canvas = document.getElementById('canvas');
+                canvas.addEventListener("webglcontextlost", function(e) {
+                    alert('WebGL context lost. You will need to reload the page.');
+                    e.preventDefault();
+                }, false);
+                return canvas;
+            })(),
+            setStatus: function(text) {
+                document.getElementById('loading').innerHTML = text;
+                if (!text) document.getElementById('loading').style.display = 'none';
+            },
+            totalDependencies: 0,
+            monitorRunDependencies: function(left) {
+                this.totalDependencies = Math.max(this.totalDependencies, left);
+                Module.setStatus(left ? 'Preparing... (' + (this.totalDependencies - left) +
+                                  '/' + this.totalDependencies + ')' : 'All downloads complete.');
+            }
+        };
+        Module.setStatus('Downloading...');
+    </script>
+    {{{ SCRIPT }}}
+</body>
+</html>

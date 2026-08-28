@@ -1,0 +1,9 @@
+build/
+build-web/
+build-test/
+*.o
+*.a
+*.wasm
+*.data
+CMakeCache.txt
+CMakeFiles/

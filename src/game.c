@@ -230,7 +230,11 @@ static void SpawnBarrel(GameWorld *world, int maxHealth) {
     b2ShapeDef shapeDef = b2DefaultShapeDef();
     shapeDef.density = 1.0f;
     shapeDef.material.friction = 0.4f;   // matches FLOOR_FRICTION's spirit
-    shapeDef.material.restitution = 0.15f; // slight bounce, not too bouncy
+    shapeDef.material.restitution = 0.02f; // near-zero bounce -- 0.15 caused
+    // visible re-bouncing that read as Gragas/barrels "bouncing up and
+    // down more" after the Box2D integration; the original had no
+    // bounce-back on landing at all (bounce_on_border zeroes velocity.y
+    // outright once settled), so keep this close to that behavior
     b2CreatePolygonShape(b->bodyId, &shapeDef, &barrelBox);
 }
 
@@ -696,8 +700,15 @@ static void DrawBarrel(GameWorld *world, Barrel *b) {
     // the original's shadow only ever sits on the ground, shrinking/growing
     // by how high the barrel currently is (rect.top/20), which reads as a
     // classic "shadow on the floor below a jumping object" effect.
+    // Capped to a sane max radius: with real Box2D physics now allowing
+    // many more barrels alive at once (pool raised 128->800) and no
+    // per-barrel bound in the original formula, a barrel occasionally
+    // reaching a high Y (thrown, freshly spawned, etc.) combined with
+    // dozens/hundreds of overlapping semi-transparent shadow ellipses
+    // could darken large portions of the screen toward solid black.
     float shadowY = HEIGHT - FLOOR_HEIGHT - 45.0f;
     float shadowRadius = (r.y > 5 * 20) ? r.y / 20.0f : 5.0f;
+    if (shadowRadius > 40.0f) shadowRadius = 40.0f;
     DrawEllipse((int)center.x, (int)shadowY, (int)shadowRadius, (int)(shadowRadius * 0.4f),
                 (Color){0, 0, 0, 70});
 
@@ -751,6 +762,7 @@ static void DrawGragas(GameWorld *world) {
     // as the barrel shadow.
     float gShadowY = HEIGHT - G_FLOOR_HEIGHT - 40.0f;
     float gShadowRadius = (r.y > 5 * 20) ? r.y / 20.0f : 5.0f;
+    if (gShadowRadius > 40.0f) gShadowRadius = 40.0f;
     DrawEllipse((int)(r.x + r.width / 2), (int)gShadowY,
                 (int)gShadowRadius, (int)(gShadowRadius * 0.4f), (Color){0, 0, 0, 60});
     // sumos.png layout mirrors rect_anim in the original: standing/spawn

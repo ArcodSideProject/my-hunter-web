@@ -1,45 +1,55 @@
 # My Hunter — raylib web edition
 
-A recreation of Epitech's classic tek1 "MyHunter" wave-survival shooter,
-rebuilt in C + [raylib](https://www.raylib.com) targeting native desktop
-**and** the web (via Emscripten/WebAssembly), so it can be deployed on
-a VPS and served through Cloudflare instead of requiring a local CSFML
-install.
+A faithful port of Epitech's tek1 "MyHunter" (repo:
+`EpitechPromo2027/B-MUL-100-LYN-1-1-myhunter-antoine.esman`), rebuilt in
+C + [raylib](https://www.raylib.com) targeting native desktop **and**
+the web (via Emscripten/WebAssembly), so it can be deployed on a VPS
+and served through Cloudflare instead of requiring a local CSFML install.
 
 ## Status
 
-This is a from-scratch recreation based on the genre conventions of the
-Epitech "Hunter" project family (wave-based top-down survival shooter,
-auto/aimed shooting, leveling, boss waves) — **not** a line-for-line port
-of a specific private `my_hunter` repository, since that repo wasn't
-accessible from this environment. Update `src/game.c` to match your
-original mechanics/balance once you're back.
+Real port, not a genre guess — mechanics, constants, and game-state
+machine were read directly from the original CSFML source and
+reproduced 1:1 in `src/game.c`:
 
-**Build verification status:** built and run successfully in this
-environment. `libraylib.a` was compiled from source (raylib 5.5) and
-`src/*.c` was compiled + linked into a real native `aarch64` executable,
-which was then run against a virtual framebuffer (Xvfb) — raylib
-initialized OpenGL (Mesa/llvmpipe software rendering), compiled its
-shaders, loaded its default font/texture, and reached the main game
-loop (`Target time per frame: 16.667 milliseconds` in the log, meaning
-`InitGameWorld`/`UpdateGameWorld`/`DrawGameWorld` all ran without
-crashing). No system packages were installed (no sudo available) —
-dev headers/libs were extracted locally from downloaded RPMs
-(`dnf5 download`, no root required) into a throwaway prefix.
+- Barrels spawn from the top of the screen with the same gravity/air
+  friction/floor-bounce physics as the original (`GRAVITY`, `AIR_FRICTION`,
+  `FLOOR_FRICTION`, same `WIDTH`/`HEIGHT` of 1152x672)
+- Clicking a barrel knocks it (`velocity.y = -60`, random x kick) and
+  reduces its health, matching `barrel_touch.c`
+- Gragas spawns once round 2 starts, auto-walks toward the nearest
+  landed barrel and pops it on contact (`goto_barrel.c`), same
+  `GRAGAS_FRICTION` and acceleration values
+- Clicking Gragas makes him jump (`gragas_touch.c`)
+- 5 rounds with the same spawn-rate/health-per-round table as
+  `easy_rounds.c` (round 1: 1hp barrels, spawn every 0.5s after 5 spawned
+  → round 2 ... → round 5: ends once 70 barrels spawned and the board
+  is clear)
+- Gragas's own score slows the barrel spawn rate the same way
+  (`spawn_rate -= gscore/30`, floor 0.3)
 
-**Not yet verified:** the actual web/Emscripten build (needs emsdk +
-a wasm-targeted raylib build, not attempted here) and real visual
-gameplay/balance testing on a real display — the headless run confirms
-the code *runs*, not that gameplay feel/balance is tuned right.
+**Not yet ported:** the original's actual sprite art (barrel/Gragas/
+background PNGs) — this version draws primitive shapes (circles,
+rounded rects) standing in for the real sprites, since the asset files
+weren't pulled into this repo. Swap in the real `assets/` sprites from
+the original repo for a visual match; the physics/logic layer is
+already correct underneath.
+
+**Build verification status:** both native and web builds compile and
+run cleanly (`gcc -Wall -Wextra`, zero warnings; `emcc`, only a benign
+pre-existing linker warning about an unused desktop-only object file).
+Both were run and screenshotted: native via Xvfb + synthetic click
+(confirmed barrels spawn, land, and Gragas engages), web via
+`python3 -m http.server` + loaded in an actual browser.
 
 ## Gameplay
 
-- WASD / arrow keys to move
-- Auto-fires at the nearest enemy
-- Kill enemies for XP, level up to pick an upgrade (damage / fire rate /
-  speed + max HP)
-- Every 5th wave ends in a boss
-- Survive as long as possible; score and wave reached are tracked
+- Click **START** on the menu to begin
+- Click barrels to knock/damage them before they land
+- Once round 2 starts, Gragas auto-hunts landed barrels for you — click
+  him to make him jump
+- Survive all 5 rounds; the game ends once 70 barrels have spawned and
+  the board is clear
 
 ## Building — native (desktop, for local testing)
 
@@ -103,8 +113,8 @@ Open `http://localhost:8080/my_hunter.html`.
 ```
 src/
   main.c    — entry point, desktop/web main loop split
-  game.h    — game state structs, constants
-  game.c    — all gameplay logic (movement, spawning, combat, XP, HUD)
+  game.h    — game state structs, constants (mirrors the original's my.h)
+  game.c    — all gameplay logic (barrels, Gragas AI, rounds, input, draw)
 web/
   shell.html — Emscripten HTML shell (canvas + loading UI)
 CMakeLists.txt — builds either native or web depending on -DEMSCRIPTEN

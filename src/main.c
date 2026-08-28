@@ -17,10 +17,7 @@ static void UpdateDrawFrame(void) {
 }
 
 int main(void) {
-    const int screenWidth = 1280;
-    const int screenHeight = 720;
-
-    InitWindow(screenWidth, screenHeight, "My Hunter — raylib web edition");
+    InitWindow(WIDTH, HEIGHT, "My Hunter — raylib web edition");
     SetTargetFPS(60);
 
     InitGameWorld(&world);

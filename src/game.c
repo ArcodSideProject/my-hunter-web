@@ -3,407 +3,437 @@
 #include <stdlib.h>
 #include <string.h>
 
-static float Vec2Dist(Vector2 a, Vector2 b) {
-    return sqrtf((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
+#define BARREL_W 60   // approximate on-screen size (3x scale of a ~20px sprite,
+#define BARREL_H 60   // matching the original's `sfVector2f barrel_scale = {3,3}`)
+#define GRAGAS_W 100  // 2x scale of ~50px squat sprite
+#define GRAGAS_H 88
+
+// ---- vector helpers (mirrors v2f_operations.c) ----
+static Vector2 V2Mul(Vector2 v, float s) { return (Vector2){v.x * s, v.y * s}; }
+static Vector2 V2Add(Vector2 a, Vector2 b) { return (Vector2){a.x + b.x, a.y + b.y}; }
+static float AbsF(float x) { return x < 0 ? -x : x; }
+
+static Rectangle BarrelRect(Barrel *b) {
+    return (Rectangle){b->pos.x, b->pos.y, BARREL_W, BARREL_H};
+}
+static Rectangle GragasRect(Gragas *g) {
+    return (Rectangle){g->pos.x, g->pos.y, GRAGAS_W, GRAGAS_H};
 }
 
-static Vector2 Vec2Norm(Vector2 v) {
-    float len = sqrtf(v.x * v.x + v.y * v.y);
-    if (len < 0.0001f) return (Vector2){0, 0};
-    return (Vector2){v.x / len, v.y / len};
-}
-
-static void SpawnParticleBurst(GameWorld *world, Vector2 pos, Color color, int count) {
-    for (int i = 0; i < count; i++) {
-        for (int p = 0; p < MAX_PARTICLES; p++) {
-            if (!world->particles[p].active) {
-                float angle = ((float)GetRandomValue(0, 360)) * DEG2RAD;
-                float speed = (float)GetRandomValue(60, 220);
-                world->particles[p] = (Particle){
-                    .active = true,
-                    .pos = pos,
-                    .vel = (Vector2){cosf(angle) * speed, sinf(angle) * speed},
-                    .life = 0.5f,
-                    .maxLife = 0.5f,
-                    .color = color
-                };
-                break;
-            }
-        }
+// ---- round table (mirrors easy_rounds.c) ----
+// returns 1 if this round is complete (should advance), else 0
+static int RoundSettings(int round, float *spawnRate, int *barrelHealth,
+                          int barrelsSpawned) {
+    switch (round) {
+        case 1:
+            *spawnRate = 0.5f; *barrelHealth = 1;
+            return barrelsSpawned > 5;
+        case 2:
+            *spawnRate = 1.0f; *barrelHealth = 1;
+            return barrelsSpawned > 15;
+        case 3:
+            *spawnRate = 0.5f; *barrelHealth = 3;
+            return barrelsSpawned > 30;
+        case 4:
+            *spawnRate = 0.4f; *barrelHealth = 10;
+            return barrelsSpawned > 33;
+        case 5:
+            *spawnRate = 6.0f; *barrelHealth = 1 + GetRandomValue(0, 1);
+            return 0; // round 5 end handled separately (barrelsSpawned>70 && count==0)
+        default:
+            *spawnRate = 1.0f; *barrelHealth = 1;
+            return 0;
     }
-}
-
-static void ResetPlayer(Player *p) {
-    p->pos = (Vector2){WORLD_WIDTH / 2.0f, WORLD_HEIGHT / 2.0f};
-    p->radius = 16.0f;
-    p->hp = PLAYER_BASE_HP;
-    p->maxHp = PLAYER_BASE_HP;
-    p->speed = PLAYER_BASE_SPEED;
-    p->fireCooldown = 0.0f;
-    p->fireRate = 0.35f;
-    p->level = 1;
-    p->xp = 0;
-    p->xpToNext = 10;
-    p->bulletDamage = 10;
-    p->invulnTimer = 0.0f;
 }
 
 void InitGameWorld(GameWorld *world) {
     memset(world, 0, sizeof(GameWorld));
-    ResetPlayer(&world->player);
     world->state = STATE_MENU;
-    world->wave = 0;
-    world->waveTimer = 0.0f;
-    world->spawnTimer = 0.0f;
-    world->score = 0;
-    world->gameTime = 0.0f;
-    world->camera.zoom = 1.0f;
-    world->camera.offset = (Vector2){GetScreenWidth() / 2.0f, GetScreenHeight() / 2.0f};
-    world->camera.target = world->player.pos;
-    world->camera.rotation = 0.0f;
+    world->round = 0;
+    world->cloudsSpeed = 20.0f;
 }
 
-static void StartWave(GameWorld *world) {
-    world->wave++;
-    world->enemiesRemainingInWave = 5 + world->wave * 3;
-    world->enemiesAliveCount = 0;
-    world->spawnTimer = 0.0f;
+static void SpawnGragas(GameWorld *world) {
+    Gragas *g = &world->gragas;
+    g->exists = true;
+    g->spawning = true;
+    g->jumping = false;
+    g->atFloor = false;
+    g->acceleration = (Vector2){0, GRAVITY * 2};
+    g->velocity = (Vector2){0, 250};
+    g->pos = (Vector2){WIDTH / 3.0f, -100};
+    g->spawnAnimation = 0;
+    g->score = 0;
 }
 
-static void SpawnEnemy(GameWorld *world) {
-    for (int i = 0; i < MAX_ENEMIES; i++) {
-        if (!world->enemies[i].active) {
-            float angle = ((float)GetRandomValue(0, 360)) * DEG2RAD;
-            float dist = 500.0f + (float)GetRandomValue(0, 200);
-            Vector2 pos = {
-                world->player.pos.x + cosf(angle) * dist,
-                world->player.pos.y + sinf(angle) * dist
-            };
+static Barrel *FreeBarrelSlot(GameWorld *world) {
+    for (int i = 0; i < MAX_BARRELS; i++) {
+        if (!world->barrels[i].active) return &world->barrels[i];
+    }
+    return NULL;
+}
 
-            EnemyType type = ENEMY_GRUNT;
-            int roll = GetRandomValue(0, 100);
-            bool isBossWave = (world->wave % 5 == 0) &&
-                               (world->enemiesRemainingInWave == 1);
-            if (isBossWave) {
-                type = ENEMY_BOSS;
-            } else if (roll < 15 && world->wave > 3) {
-                type = ENEMY_TANK;
-            } else if (roll < 40 && world->wave > 1) {
-                type = ENEMY_RUNNER;
-            }
+static void SpawnBarrel(GameWorld *world, int maxHealth) {
+    Barrel *b = FreeBarrelSlot(world);
+    if (!b) return;
+    memset(b, 0, sizeof(Barrel));
+    b->active = true;
+    b->spawning = true;
+    b->pos = (Vector2){(float)GetRandomValue(0, WIDTH), HEIGHT + 50.0f};
+    b->acceleration = (Vector2){0, GRAVITY};
+    b->velocity = (Vector2){(float)(GetRandomValue(0, 100) - 50), -110};
+    b->maxHealth = maxHealth;
+    b->health = maxHealth;
+    b->dead = false;
+    world->barrelCount++;
+    world->barrelsSpawned++;
+}
 
-            Enemy e = {0};
-            e.active = true;
-            e.pos = pos;
-            e.type = type;
-            switch (type) {
-                case ENEMY_RUNNER:
-                    e.radius = 10.0f; e.maxHp = 15 + world->wave * 2;
-                    e.speed = 160.0f; break;
-                case ENEMY_TANK:
-                    e.radius = 22.0f; e.maxHp = 60 + world->wave * 5;
-                    e.speed = 60.0f; break;
-                case ENEMY_BOSS:
-                    e.radius = 40.0f; e.maxHp = 300 + world->wave * 30;
-                    e.speed = 70.0f; break;
-                default:
-                    e.radius = 14.0f; e.maxHp = 25 + world->wave * 3;
-                    e.speed = 95.0f; break;
-            }
-            e.hp = e.maxHp;
-            world->enemies[i] = e;
-            world->enemiesAliveCount++;
-            world->enemiesRemainingInWave--;
+// ---- barrels (mirrors barrels.c / bounce.c) ----
+static void BounceOnBorder(Barrel *b) {
+    float floorPos = HEIGHT - BARREL_H - FLOOR_HEIGHT;
+    if (b->pos.x < 0) b->velocity.x = AbsF(b->velocity.x);
+    if (b->pos.x > WIDTH - BARREL_W) b->velocity.x = -AbsF(b->velocity.x);
+    if (b->spawning) return;
+    b->atFloor = false;
+    if (b->pos.y > floorPos) {
+        if (b->velocity.y <= GRAVITY && b->velocity.y > 0) {
+            b->atFloor = true;
+            b->velocity.y = 0;
             return;
         }
+        b->velocity = V2Mul(b->velocity, FLOOR_FRICTION);
+        b->velocity.y = -AbsF(b->velocity.y);
     }
 }
 
-static void FireBullet(GameWorld *world, Vector2 dir) {
-    for (int i = 0; i < MAX_BULLETS; i++) {
-        if (!world->bullets[i].active) {
-            world->bullets[i] = (Bullet){
-                .active = true,
-                .pos = world->player.pos,
-                .vel = (Vector2){dir.x * BULLET_SPEED, dir.y * BULLET_SPEED},
-                .radius = 5.0f,
-                .damage = world->player.bulletDamage,
-                .life = 1.5f
-            };
-            return;
+static void AnimateFlyingBarrel(Barrel *b, float dt) {
+    b->velocity = V2Mul(b->velocity, AIR_FRICTION);
+    Vector2 move = V2Mul(b->acceleration, dt);
+    b->velocity = V2Add(b->velocity, move);
+    BounceOnBorder(b);
+    b->pos = V2Add(b->pos, V2Mul(b->velocity, dt));
+}
+
+static void AnimateBarrel(Barrel *b, float dt) {
+    b->spawnTimer += dt;
+    if (b->spawnTimer > 0.5f) b->spawning = false;
+    b->rotation += b->velocity.x / 2.0f;
+    AnimateFlyingBarrel(b, dt);
+}
+
+#define EXPLOSION_FRAME_TIME 0.035f
+#define EXPLOSION_FRAMES 8
+
+static void AnimateExplosion(Barrel *b, float dt) {
+    b->explosionTimer += dt;
+    if (b->explosionTimer > EXPLOSION_FRAME_TIME) {
+        b->explosionFrame++;
+        b->explosionTimer = 0;
+        if (b->explosionFrame >= EXPLOSION_FRAMES) {
+            b->active = false; // done exploding, free the slot
         }
     }
 }
 
-static Enemy *NearestEnemy(GameWorld *world, Vector2 from) {
-    Enemy *nearest = NULL;
-    float bestDist = 1e9f;
-    for (int i = 0; i < MAX_ENEMIES; i++) {
-        if (!world->enemies[i].active) continue;
-        float d = Vec2Dist(from, world->enemies[i].pos);
-        if (d < bestDist) {
-            bestDist = d;
-            nearest = &world->enemies[i];
-        }
-    }
-    return nearest;
-}
-
-static void UpdatePlaying(GameWorld *world, float dt) {
-    Player *p = &world->player;
-    world->gameTime += dt;
-
-    // movement
-    Vector2 move = {0, 0};
-    if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP)) move.y -= 1;
-    if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN)) move.y += 1;
-    if (IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT)) move.x -= 1;
-    if (IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT)) move.x += 1;
-    move = Vec2Norm(move);
-    p->pos.x += move.x * p->speed * dt;
-    p->pos.y += move.y * p->speed * dt;
-
-    if (p->pos.x < 0) p->pos.x = 0;
-    if (p->pos.y < 0) p->pos.y = 0;
-    if (p->pos.x > WORLD_WIDTH) p->pos.x = WORLD_WIDTH;
-    if (p->pos.y > WORLD_HEIGHT) p->pos.y = WORLD_HEIGHT;
-
-    world->camera.target = p->pos;
-
-    if (p->invulnTimer > 0) p->invulnTimer -= dt;
-
-    // auto-fire at nearest enemy
-    p->fireCooldown -= dt;
-    if (p->fireCooldown <= 0) {
-        Enemy *target = NearestEnemy(world, p->pos);
-        if (target) {
-            Vector2 dir = Vec2Norm((Vector2){
-                target->pos.x - p->pos.x,
-                target->pos.y - p->pos.y
-            });
-            FireBullet(world, dir);
-            p->fireCooldown = p->fireRate;
-        }
-    }
-
-    // spawn logic
-    world->spawnTimer -= dt;
-    if (world->spawnTimer <= 0 && world->enemiesRemainingInWave > 0) {
-        SpawnEnemy(world);
-        world->spawnTimer = 0.6f;
-    }
-    if (world->enemiesRemainingInWave <= 0 && world->enemiesAliveCount <= 0) {
-        StartWave(world);
-    }
-
-    // bullets
-    for (int i = 0; i < MAX_BULLETS; i++) {
-        Bullet *b = &world->bullets[i];
+static void UpdateBarrels(GameWorld *world, float dt) {
+    int aliveCount = 0;
+    for (int i = 0; i < MAX_BARRELS; i++) {
+        Barrel *b = &world->barrels[i];
         if (!b->active) continue;
-        b->pos.x += b->vel.x * dt;
-        b->pos.y += b->vel.y * dt;
-        b->life -= dt;
-        if (b->life <= 0) { b->active = false; continue; }
+        if (b->dead) {
+            AnimateExplosion(b, dt);
+        } else {
+            AnimateBarrel(b, dt);
+        }
+        if (b->active) aliveCount++;
+    }
+    world->barrelCount = aliveCount;
+}
 
-        for (int j = 0; j < MAX_ENEMIES; j++) {
-            Enemy *e = &world->enemies[j];
-            if (!e->active) continue;
-            if (Vec2Dist(b->pos, e->pos) < b->radius + e->radius) {
-                e->hp -= b->damage;
-                e->hitFlash = 0.1f;
-                b->active = false;
-                SpawnParticleBurst(world, b->pos, YELLOW, 4);
-                if (e->hp <= 0) {
-                    e->active = false;
-                    world->enemiesAliveCount--;
-                    world->score += (e->type == ENEMY_BOSS) ? 500 :
-                                     (e->type == ENEMY_TANK) ? 50 : 10;
-                    p->xp += (e->type == ENEMY_BOSS) ? 50 :
-                              (e->type == ENEMY_TANK) ? 8 : 3;
-                    SpawnParticleBurst(world, e->pos, RED, 12);
-                    if (p->xp >= p->xpToNext) {
-                        p->xp -= p->xpToNext;
-                        p->xpToNext = (int)(p->xpToNext * 1.35f) + 5;
-                        p->level++;
-                        world->state = STATE_LEVEL_UP;
-                    }
-                }
-                break;
-            }
+// ---- gragas (mirrors gragas.c / goto_barrel.c / animate_spawn.c) ----
+static Barrel *NearestLiveFloorBarrel(GameWorld *world) {
+    // mirrors goto_barrel's linked-list walk: first non-dead barrel that's
+    // landed on the floor (skips flying/dead ones)
+    for (int i = 0; i < MAX_BARRELS; i++) {
+        Barrel *b = &world->barrels[i];
+        if (b->active && !b->dead && b->atFloor) return b;
+    }
+    return NULL;
+}
+
+static void GotoBarrel(Gragas *g, GameWorld *world, float dt) {
+    g->acceleration.x = 0;
+    Barrel *target = NearestLiveFloorBarrel(world);
+    if (!target) return;
+
+    g->walkAnimTimer += dt;
+    (void)g->walkAnimTimer; // visual-only in the port; kept for parity/logging
+
+    if (g->pos.x < target->pos.x) g->acceleration.x = 20;
+    if (g->pos.x > target->pos.x) g->acceleration.x -= 20;
+
+    // touching_barrel: same rounding-to-nearest-100 comparison as the
+    // original's my_round(), reimplemented directly as a small-tolerance
+    // proximity check (the original rounds screen-space X to the nearest
+    // 100px bucket before comparing, which in practice just means "close
+    // enough on the X axis" -- reproduced here without the float/int
+    // rounding quirks of the CSFML version).
+    if (AbsF(g->pos.x - target->pos.x) < 50.0f) {
+        if (!target->dead) {
+            target->dead = true;
+            target->explosionFrame = 0;
+            target->explosionTimer = 0;
+            g->score++;
+        }
+        g->acceleration.x = 0;
+    }
+}
+
+static void StandOnFloor(Gragas *g) {
+    if (g->pos.y > HEIGHT - GRAGAS_H - G_FLOOR_HEIGHT) {
+        g->atFloor = true;
+        if (g->jumping) return;
+        if (g->spawning) {
+            g->spawnAnimation = 1;
+            g->spawnAnimTimer = 0;
+            g->spawning = false;
+        }
+        g->velocity.y = 0;
+        g->pos.y = HEIGHT - G_FLOOR_HEIGHT - GRAGAS_H;
+    }
+}
+
+static void GragasMovement(Gragas *g, GameWorld *world, float dt) {
+    if (!g->spawning && !g->jumping) GotoBarrel(g, world, dt);
+
+    g->velocity = V2Mul(g->velocity, GRAGAS_FRICTION);
+    Vector2 move = V2Mul(g->acceleration, dt);
+    g->velocity = V2Add(g->velocity, move);
+    if (g->pos.x > WIDTH) g->velocity.x = -1;
+
+    StandOnFloor(g);
+    g->pos = V2Add(g->pos, V2Mul(g->velocity, dt));
+}
+
+static void AnimateGragasSpawn(Gragas *g, float dt) {
+    g->spawnAnimTimer += dt;
+    if (g->spawnAnimation == 3 && g->spawnAnimTimer > 0.50f) {
+        g->spawnAnimation = 0;
+    } else if (g->spawnAnimation == 2 && g->spawnAnimTimer > 0.30f) {
+        g->spawnAnimTimer = 0;
+        g->spawnAnimation++;
+    } else if (g->spawnAnimation == 1 && g->spawnAnimTimer > 0.07f) {
+        g->spawnAnimTimer = 0;
+        g->spawnAnimation++;
+    }
+}
+
+static void JumpingGragas(Gragas *g) {
+    if (g->jumping && g->atFloor) g->jumping = false;
+}
+
+static void AnimateGragas(GameWorld *world, float dt) {
+    Gragas *g = &world->gragas;
+    if (!g->exists) return;
+    JumpingGragas(g);
+    if (g->spawnAnimation) {
+        AnimateGragasSpawn(g, dt);
+    } else {
+        GragasMovement(g, world, dt);
+    }
+}
+
+// ---- input handling (mirrors mouse.c / event_handler.c) ----
+static void BarrelTouched(Barrel *b) {
+    b->velocity.y = -60;
+    b->velocity.x = 15.0f * ((GetRandomValue(0, 1) == 0) ? 1.0f : -1.0f);
+    b->health--;
+    if (b->health <= 0) {
+        b->dead = true;
+        b->explosionFrame = 0;
+        b->explosionTimer = 0;
+    }
+}
+
+static void HandleClick(GameWorld *world) {
+    Vector2 m = world->mousePos;
+
+    if (world->state == STATE_MENU) {
+        // "start button" region -- centered box, matches menu draw below
+        Rectangle startBtn = {WIDTH / 2.0f - 100, HEIGHT / 2.0f - 30, 200, 60};
+        if (CheckCollisionPointRec(m, startBtn)) {
+            world->round = 1;
+            world->state = STATE_PLAYING;
+        }
+        return;
+    }
+
+    for (int i = 0; i < MAX_BARRELS; i++) {
+        Barrel *b = &world->barrels[i];
+        if (b->active && !b->dead && CheckCollisionPointRec(m, BarrelRect(b))) {
+            BarrelTouched(b);
         }
     }
 
-    // enemies chase player
-    for (int i = 0; i < MAX_ENEMIES; i++) {
-        Enemy *e = &world->enemies[i];
-        if (!e->active) continue;
-        if (e->hitFlash > 0) e->hitFlash -= dt;
-
-        Vector2 dir = Vec2Norm((Vector2){p->pos.x - e->pos.x, p->pos.y - e->pos.y});
-        e->pos.x += dir.x * e->speed * dt;
-        e->pos.y += dir.y * e->speed * dt;
-
-        if (Vec2Dist(e->pos, p->pos) < e->radius + p->radius) {
-            if (p->invulnTimer <= 0) {
-                int dmg = (e->type == ENEMY_BOSS) ? 25 :
-                          (e->type == ENEMY_TANK) ? 15 : 8;
-                p->hp -= dmg;
-                p->invulnTimer = 0.6f;
-                SpawnParticleBurst(world, p->pos, ORANGE, 8);
-                if (p->hp <= 0) {
-                    world->state = STATE_GAME_OVER;
-                }
-            }
+    Gragas *g = &world->gragas;
+    if (g->exists && !g->spawning && !g->spawnAnimation &&
+        CheckCollisionPointRec(m, GragasRect(g))) {
+        g->velocity = (Vector2){20, -80};
+        if (!g->jumping) {
+            g->acceleration.x = 0;
+            g->jumping = true;
+            g->atFloor = false;
+            g->pos.y -= 40;
         }
     }
+}
 
-    // particles
-    for (int i = 0; i < MAX_PARTICLES; i++) {
-        Particle *pt = &world->particles[i];
-        if (!pt->active) continue;
-        pt->pos.x += pt->vel.x * dt;
-        pt->pos.y += pt->vel.y * dt;
-        pt->vel.x *= 0.92f;
-        pt->vel.y *= 0.92f;
-        pt->life -= dt;
-        if (pt->life <= 0) pt->active = false;
+// ---- round/spawn driver (mirrors rounds.c) ----
+static void SpawnRoundTick(GameWorld *world, float dt) {
+    world->roundClock += dt;
+    float spawnRate = 1.0f;
+    int barrelHealth = 1;
+
+    if (world->round == 5) {
+        RoundSettings(5, &spawnRate, &barrelHealth, world->barrelsSpawned);
+        if (world->barrelsSpawned > 70 && world->barrelCount == 0) {
+            world->state = STATE_GAME_OVER;
+            return;
+        }
+    } else if (world->round >= 1 && world->round <= 4) {
+        int advance = RoundSettings(world->round, &spawnRate, &barrelHealth,
+                                     world->barrelsSpawned);
+        if (advance) world->round++;
+    }
+
+    if (world->round == 2 && !world->gragas.exists) {
+        SpawnGragas(world);
+    }
+    if (world->gragas.exists) {
+        spawnRate -= world->gragas.score / 30.0f;
+        if (spawnRate < 0.3f) spawnRate = 0.3f;
+    }
+    if (world->roundClock > 1.0f / spawnRate && world->barrelsSpawned < 70) {
+        SpawnBarrel(world, barrelHealth);
+        world->roundClock = 0;
     }
 }
 
 void UpdateGameWorld(GameWorld *world, float dt) {
-    switch (world->state) {
-        case STATE_MENU:
-            if (IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER)) {
-                InitGameWorld(world);
-                world->state = STATE_PLAYING;
-                StartWave(world);
-            }
-            break;
-        case STATE_PLAYING:
-            UpdatePlaying(world, dt);
-            break;
-        case STATE_LEVEL_UP:
-            if (IsKeyPressed(KEY_ONE)) {
-                world->player.bulletDamage += 5;
-                world->state = STATE_PLAYING;
-            } else if (IsKeyPressed(KEY_TWO)) {
-                world->player.fireRate *= 0.85f;
-                world->state = STATE_PLAYING;
-            } else if (IsKeyPressed(KEY_THREE)) {
-                world->player.speed += 25.0f;
-                world->player.maxHp += 15;
-                world->player.hp += 15;
-                world->state = STATE_PLAYING;
-            }
-            break;
-        case STATE_GAME_OVER:
-            if (IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER)) {
-                InitGameWorld(world);
-                world->state = STATE_MENU;
-            }
-            break;
-    }
-}
+    world->mousePos = GetMousePosition();
+    world->cloudsX += world->cloudsSpeed * dt;
+    if (world->cloudsX > WIDTH * 2) world->cloudsX = 0;
 
-static Color EnemyColor(EnemyType type) {
-    switch (type) {
-        case ENEMY_RUNNER: return SKYBLUE;
-        case ENEMY_TANK: return PURPLE;
-        case ENEMY_BOSS: return MAROON;
-        default: return LIME;
-    }
-}
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) HandleClick(world);
 
-static void DrawHUD(GameWorld *world) {
-    Player *p = &world->player;
-    DrawRectangle(10, 10, 220, 20, DARKGRAY);
-    DrawRectangle(10, 10, (int)(220.0f * p->hp / p->maxHp), 20, RED);
-    DrawRectangleLines(10, 10, 220, 20, WHITE);
-    DrawText(TextFormat("HP %d/%d", p->hp, p->maxHp), 15, 12, 16, WHITE);
+    if (world->state == STATE_MENU) return;
 
-    DrawRectangle(10, 35, 220, 12, DARKGRAY);
-    DrawRectangle(10, 35, (int)(220.0f * p->xp / p->xpToNext), 12, SKYBLUE);
-    DrawRectangleLines(10, 35, 220, 12, WHITE);
-
-    DrawText(TextFormat("Wave %d   Score %d   Lv.%d", world->wave, world->score, p->level),
-              10, 55, 18, WHITE);
-    DrawText(TextFormat("Enemies left: %d", world->enemiesRemainingInWave + world->enemiesAliveCount),
-              10, 78, 16, LIGHTGRAY);
-}
-
-void DrawGameWorld(GameWorld *world) {
-    ClearBackground((Color){20, 20, 28, 255});
-
-    if (world->state == STATE_MENU) {
-        const char *title = "MY HUNTER (web)";
-        int tw = MeasureText(title, 48);
-        DrawText(title, GetScreenWidth() / 2 - tw / 2, GetScreenHeight() / 2 - 80, 48, RAYWHITE);
-        const char *sub = "Press SPACE to start   |   WASD/Arrows to move, auto-fire";
-        int sw = MeasureText(sub, 20);
-        DrawText(sub, GetScreenWidth() / 2 - sw / 2, GetScreenHeight() / 2, 20, LIGHTGRAY);
+    if (world->state == STATE_GAME_OVER) {
+        if (IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER)) {
+            InitGameWorld(world);
+        }
         return;
     }
 
-    BeginMode2D(world->camera);
+    SpawnRoundTick(world, dt);
+    UpdateBarrels(world, dt);
+    AnimateGragas(world, dt);
+}
 
-    DrawRectangleLines(0, 0, WORLD_WIDTH, WORLD_HEIGHT, DARKGRAY);
+// ---- drawing ----
+static void DrawBackground(GameWorld *world) {
+    ClearBackground((Color){135, 206, 235, 255}); // sky
+    // clouds (simple scrolling ellipses standing in for the sprite)
+    for (int i = 0; i < 4; i++) {
+        float x = fmodf(world->cloudsX + i * 320.0f, WIDTH + 200) - 100;
+        DrawEllipse((int)x, 90 + (i % 2) * 40, 60, 24, (Color){255, 255, 255, 200});
+    }
+    // distant mountains
+    DrawTriangle((Vector2){0, HEIGHT - FLOOR_HEIGHT - 220},
+                 (Vector2){WIDTH * 0.3f, HEIGHT - FLOOR_HEIGHT - 60},
+                 (Vector2){WIDTH * 0.6f, HEIGHT - FLOOR_HEIGHT - 220},
+                 (Color){120, 130, 150, 255});
+    // ground
+    DrawRectangle(0, HEIGHT - FLOOR_HEIGHT, WIDTH, FLOOR_HEIGHT, (Color){90, 140, 60, 255});
+}
 
-    for (int i = 0; i < MAX_PARTICLES; i++) {
-        Particle *pt = &world->particles[i];
-        if (!pt->active) continue;
-        float alpha = pt->life / pt->maxLife;
-        Color c = pt->color;
-        c.a = (unsigned char)(alpha * 255);
-        DrawCircleV(pt->pos, 3.0f * alpha, c);
+static void DrawBarrel(Barrel *b) {
+    Rectangle r = BarrelRect(b);
+    Vector2 center = {r.x + r.width / 2, r.y + r.height / 2};
+
+    if (b->dead) {
+        float t = (float)b->explosionFrame / EXPLOSION_FRAMES;
+        Color c = Fade(ORANGE, 1.0f - t);
+        DrawCircleV(center, r.width / 2 * (1.0f + t), c);
+        return;
     }
 
-    for (int i = 0; i < MAX_ENEMIES; i++) {
-        Enemy *e = &world->enemies[i];
-        if (!e->active) continue;
-        Color c = e->hitFlash > 0 ? WHITE : EnemyColor(e->type);
-        DrawCircleV(e->pos, e->radius, c);
-        float hpFrac = (float)e->hp / e->maxHp;
-        DrawRectangle((int)(e->pos.x - e->radius), (int)(e->pos.y - e->radius - 8),
-                      (int)(e->radius * 2), 4, DARKGRAY);
-        DrawRectangle((int)(e->pos.x - e->radius), (int)(e->pos.y - e->radius - 8),
-                      (int)(e->radius * 2 * hpFrac), 4, RED);
+    unsigned char healthTint = (unsigned char)(255 * b->health / (b->maxHealth > 0 ? b->maxHealth : 1));
+    Color c = b->spawning ? (Color){120, 120, 120, 220}
+                           : (Color){255, healthTint, healthTint, 255};
+
+    DrawCircleV((Vector2){center.x, r.y + r.height - 6}, r.width / 2.2f, (Color){0, 0, 0, 60}); // shadow
+    Rectangle dst = {center.x, center.y, r.width, r.height};
+    Vector2 origin = {r.width / 2, r.height / 2};
+    // simple rotated rounded rect standing in for the barrel sprite
+    DrawRectanglePro(dst, origin, b->rotation, c);
+    DrawRectangleLinesEx((Rectangle){r.x, r.y, r.width, r.height}, 2, (Color){80, 50, 20, 255});
+}
+
+static void DrawGragas(Gragas *g) {
+    if (!g->exists) return;
+    Rectangle r = GragasRect(g);
+    Color body = ORANGE;
+    if (g->spawning || g->spawnAnimation) body = Fade(ORANGE, 0.6f);
+
+    DrawEllipse((int)(r.x + r.width / 2), (int)(HEIGHT - G_FLOOR_HEIGHT - 4),
+                (int)(r.width / 2.5f), 8, (Color){0, 0, 0, 60}); // shadow
+    DrawRectangleRounded(r, 0.3f, 8, body);
+    DrawText("G", (int)(r.x + r.width / 2 - 8), (int)(r.y + r.height / 2 - 12), 24, WHITE);
+}
+
+static void DrawHUD(GameWorld *world) {
+    DrawText(TextFormat("Round: %d/5", world->round), 20, 15, 22, BLACK);
+    DrawText(TextFormat("Barrels spawned: %d/70", world->barrelsSpawned), 20, 42, 18, DARKGRAY);
+    if (world->gragas.exists) {
+        DrawText(TextFormat("Gragas's score: %d", world->gragas.score), 20, 66, 20, MAROON);
+    }
+}
+
+void DrawGameWorld(GameWorld *world) {
+    DrawBackground(world);
+
+    if (world->state == STATE_MENU) {
+        const char *title = "MY HUNTER";
+        int tw = MeasureText(title, 56);
+        DrawText(title, WIDTH / 2 - tw / 2, HEIGHT / 2 - 140, 56, (Color){60, 30, 10, 255});
+
+        Rectangle startBtn = {WIDTH / 2.0f - 100, HEIGHT / 2.0f - 30, 200, 60};
+        DrawRectangleRounded(startBtn, 0.3f, 8, (Color){200, 80, 40, 255});
+        const char *label = "START";
+        int lw = MeasureText(label, 28);
+        DrawText(label, (int)(startBtn.x + startBtn.width / 2 - lw / 2),
+                  (int)(startBtn.y + startBtn.height / 2 - 14), 28, WHITE);
+        return;
     }
 
-    for (int i = 0; i < MAX_BULLETS; i++) {
-        Bullet *b = &world->bullets[i];
-        if (!b->active) continue;
-        DrawCircleV(b->pos, b->radius, YELLOW);
+    for (int i = 0; i < MAX_BARRELS; i++) {
+        if (world->barrels[i].active) DrawBarrel(&world->barrels[i]);
     }
-
-    Player *p = &world->player;
-    Color pc = (p->invulnTimer > 0 && ((int)(p->invulnTimer * 20) % 2 == 0)) ? WHITE : GREEN;
-    DrawCircleV(p->pos, p->radius, pc);
-    DrawCircleLines((int)p->pos.x, (int)p->pos.y, p->radius, RAYWHITE);
-
-    EndMode2D();
-
+    DrawGragas(&world->gragas);
     DrawHUD(world);
 
-    if (world->state == STATE_LEVEL_UP) {
-        DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), (Color){0, 0, 0, 180});
-        const char *title = "LEVEL UP! Choose an upgrade:";
-        int tw = MeasureText(title, 32);
-        DrawText(title, GetScreenWidth() / 2 - tw / 2, GetScreenHeight() / 2 - 100, 32, GOLD);
-        DrawText("[1] +5 Bullet Damage", GetScreenWidth() / 2 - 140, GetScreenHeight() / 2 - 30, 22, RAYWHITE);
-        DrawText("[2] +15% Fire Rate", GetScreenWidth() / 2 - 140, GetScreenHeight() / 2 + 5, 22, RAYWHITE);
-        DrawText("[3] +Speed & +15 Max HP", GetScreenWidth() / 2 - 140, GetScreenHeight() / 2 + 40, 22, RAYWHITE);
-    }
-
     if (world->state == STATE_GAME_OVER) {
-        DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), (Color){0, 0, 0, 180});
-        const char *title = "GAME OVER";
+        DrawRectangle(0, 0, WIDTH, HEIGHT, (Color){0, 0, 0, 150});
+        const char *title = "CLEARED!";
         int tw = MeasureText(title, 48);
-        DrawText(title, GetScreenWidth() / 2 - tw / 2, GetScreenHeight() / 2 - 60, 48, RED);
-        const char *score = TextFormat("Final Score: %d   Wave Reached: %d", world->score, world->wave);
-        int sw = MeasureText(score, 22);
-        DrawText(score, GetScreenWidth() / 2 - sw / 2, GetScreenHeight() / 2, 22, RAYWHITE);
-        const char *sub = "Press SPACE to return to menu";
-        int subw = MeasureText(sub, 18);
-        DrawText(sub, GetScreenWidth() / 2 - subw / 2, GetScreenHeight() / 2 + 40, 18, LIGHTGRAY);
+        DrawText(title, WIDTH / 2 - tw / 2, HEIGHT / 2 - 60, 48, GOLD);
+        const char *sub = TextFormat("Gragas's final score: %d", world->gragas.score);
+        int sw = MeasureText(sub, 22);
+        DrawText(sub, WIDTH / 2 - sw / 2, HEIGHT / 2, 22, RAYWHITE);
+        const char *hint = "Press SPACE to play again";
+        int hw = MeasureText(hint, 18);
+        DrawText(hint, WIDTH / 2 - hw / 2, HEIGHT / 2 + 40, 18, LIGHTGRAY);
     }
 }

@@ -53,6 +53,7 @@ void InitGameWorld(GameWorld *world) {
     world->state = STATE_MENU;
     world->round = 0;
     world->cloudsSpeed = 20.0f;
+    world->treeTransparency = 255.0f;
 }
 
 void LoadGameAssets(GameWorld *world) {
@@ -68,6 +69,11 @@ void LoadGameAssets(GameWorld *world) {
     a->tiles = LoadTexture("assets/background/Tiles.png");
     a->tree = LoadTexture("assets/background/Tree.png");
     a->frontGrass = LoadTexture("assets/background/Front_grass.png");
+    // CPU-side copy of the tree, used for pixel-perfect alpha hit-testing
+    // in the mouse-hover blur effect (matches blur_tree.c's
+    // sfImage_getPixel(...).a check) -- a plain Texture2D can't be read
+    // back on the CPU without this.
+    a->treeImage = LoadImage("assets/background/Tree.png");
     a->font = LoadFontEx("assets/fonts/upheavtt.ttf", 48, NULL, 0);
     a->loaded = (a->barrel.id != 0 && a->sumos.id != 0);
     if (!a->loaded) {
@@ -90,6 +96,7 @@ void UnloadGameAssets(GameWorld *world) {
     UnloadTexture(a->tiles);
     UnloadTexture(a->tree);
     UnloadTexture(a->frontGrass);
+    UnloadImage(a->treeImage);
     UnloadFont(a->font);
 }
 
@@ -127,8 +134,6 @@ static void SpawnBarrel(GameWorld *world, int maxHealth) {
     b->dead = false;
     world->barrelCount++;
     world->barrelsSpawned++;
-    TraceLog(LOG_INFO, "SpawnBarrel: pos=(%.1f,%.1f) count=%d spawned=%d",
-             b->pos.x, b->pos.y, world->barrelCount, world->barrelsSpawned);
 }
 
 // ---- barrels (mirrors barrels.c / bounce.c) ----
@@ -142,6 +147,12 @@ static void BounceOnBorder(Barrel *b) {
         if (b->velocity.y <= GRAVITY && b->velocity.y > 0) {
             b->atFloor = true;
             b->velocity.y = 0;
+            // Unlike the original (which only zeroes velocity and lets
+            // whatever position was already reached stand, occasionally
+            // sinking a few px into the floor on a fast/coarse frame),
+            // explicitly clamp to the floor line here so barrels always
+            // visibly rest on top of the ground instead of underneath it.
+            b->pos.y = floorPos;
             return;
         }
         b->velocity = V2Mul(b->velocity, FLOOR_FRICTION);
@@ -149,23 +160,23 @@ static void BounceOnBorder(Barrel *b) {
     }
 }
 
-static void AnimateFlyingBarrel(Barrel *b, float dt) {
+static void AnimateFlyingBarrel(Barrel *b, float physicsDt) {
     b->velocity = V2Mul(b->velocity, AIR_FRICTION);
-    Vector2 move = V2Mul(b->acceleration, dt);
+    Vector2 move = V2Mul(b->acceleration, physicsDt);
     b->velocity = V2Add(b->velocity, move);
     BounceOnBorder(b);
-    b->pos = V2Add(b->pos, V2Mul(b->velocity, dt));
+    b->pos = V2Add(b->pos, V2Mul(b->velocity, physicsDt));
 }
 
-static void AnimateBarrel(Barrel *b, float dt) {
-    b->spawnTimer += dt;
+static void AnimateBarrel(Barrel *b, float dt, float physicsDt) {
+    b->spawnTimer += dt; // real time, matches sfClock_getElapsedTime > 500000us
     if (b->spawnTimer > 0.5f) b->spawning = false;
     b->rotation += b->velocity.x / 2.0f;
-    AnimateFlyingBarrel(b, dt);
+    AnimateFlyingBarrel(b, physicsDt);
 }
 
 #define EXPLOSION_FRAME_TIME 0.035f
-#define EXPLOSION_FRAMES 8
+#define EXPLOSION_FRAMES 6  // real frame count in explosion.png (315px / (50+3)px stride)
 
 static void AnimateExplosion(Barrel *b, float dt) {
     b->explosionTimer += dt;
@@ -178,7 +189,7 @@ static void AnimateExplosion(Barrel *b, float dt) {
     }
 }
 
-static void UpdateBarrels(GameWorld *world, float dt) {
+static void UpdateBarrels(GameWorld *world, float dt, float physicsDt) {
     int aliveCount = 0;
     for (int i = 0; i < MAX_BARRELS; i++) {
         Barrel *b = &world->barrels[i];
@@ -186,7 +197,7 @@ static void UpdateBarrels(GameWorld *world, float dt) {
         if (b->dead) {
             AnimateExplosion(b, dt);
         } else {
-            AnimateBarrel(b, dt);
+            AnimateBarrel(b, dt, physicsDt);
         }
         if (b->active) aliveCount++;
     }
@@ -211,7 +222,8 @@ static void GotoBarrel(Gragas *g, GameWorld *world, float dt) {
 
     // walking_animation: step through 3 squat frames, cadence tied to
     // horizontal speed (faster walk = faster frame cycling), same formula
-    // as the original's `0.05 + 1/|velocity.x|` threshold.
+    // as the original's `0.05 + 1/|velocity.x|` threshold. Uses real dt,
+    // matching sfClock_getElapsedTime (unscaled).
     g->walkAnimTimer += dt;
     float threshold = 0.05f + (1.0f / (AbsF(g->velocity.x) > 0.01f ? AbsF(g->velocity.x) : 0.01f));
     if (g->walkAnimTimer > threshold) {
@@ -253,16 +265,16 @@ static void StandOnFloor(Gragas *g) {
     }
 }
 
-static void GragasMovement(Gragas *g, GameWorld *world, float dt) {
+static void GragasMovement(Gragas *g, GameWorld *world, float dt, float physicsDt) {
     if (!g->spawning && !g->jumping) GotoBarrel(g, world, dt);
 
     g->velocity = V2Mul(g->velocity, GRAGAS_FRICTION);
-    Vector2 move = V2Mul(g->acceleration, dt);
+    Vector2 move = V2Mul(g->acceleration, physicsDt);
     g->velocity = V2Add(g->velocity, move);
     if (g->pos.x > WIDTH) g->velocity.x = -1;
 
     StandOnFloor(g);
-    g->pos = V2Add(g->pos, V2Mul(g->velocity, dt));
+    g->pos = V2Add(g->pos, V2Mul(g->velocity, physicsDt));
 }
 
 static void AnimateGragasSpawn(Gragas *g, float dt) {
@@ -282,18 +294,57 @@ static void JumpingGragas(Gragas *g) {
     if (g->jumping && g->atFloor) g->jumping = false;
 }
 
-static void AnimateGragas(GameWorld *world, float dt) {
+static void AnimateGragas(GameWorld *world, float dt, float physicsDt) {
     Gragas *g = &world->gragas;
     if (!g->exists) return;
     JumpingGragas(g);
     if (g->spawnAnimation) {
         AnimateGragasSpawn(g, dt);
     } else {
-        GragasMovement(g, world, dt);
+        GragasMovement(g, world, dt, physicsDt);
     }
 }
 
 // ---- input handling (mirrors mouse.c / event_handler.c) ----
+static void BlurTree(GameWorld *world) {
+    Assets *a = &world->assets;
+    if (!a->loaded) return;
+    float scaleX = WIDTH / 384.0f, scaleY = HEIGHT / 224.0f;
+
+    // Tree on-screen bounds, matching sfSprite_getGlobalBounds(bg->tree):
+    // position is (TREE_OFFSET_X*scaleX, TREE_OFFSET_Y*scaleY), size is the
+    // raw Tree.png dimensions scaled by the same background scale factor.
+    Rectangle treeRect = {
+        TREE_OFFSET_X * scaleX, TREE_OFFSET_Y * scaleY,
+        a->tree.width * scaleX, a->tree.height * scaleY
+    };
+
+    bool overOpaquePixel = false;
+    if (CheckCollisionPointRec(world->mousePos, treeRect)) {
+        // map screen-space mouse position back to a pixel in the original
+        // (unscaled) tree image, exactly mirroring blur_tree.c's
+        // `(mpos - TREE_OFFSET * resize) / 3` (the original always divides
+        // by the fixed 3x background scale; we use the real scaleX/scaleY
+        // here so this still lines up if the window is ever resized).
+        int px = (int)((world->mousePos.x - TREE_OFFSET_X * scaleX) / scaleX);
+        int py = (int)((world->mousePos.y - TREE_OFFSET_Y * scaleY) / scaleY);
+        if (px >= 0 && px < a->treeImage.width && py >= 0 && py < a->treeImage.height) {
+            Color c = GetImageColor(a->treeImage, px, py);
+            overOpaquePixel = (c.a != 0);
+        }
+    }
+
+    if (overOpaquePixel) {
+        if (world->treeTransparency > 150.0f) world->treeTransparency -= TREE_BLUR;
+    } else {
+        if (world->treeTransparency < 255.0f - TREE_BLUR) {
+            world->treeTransparency += TREE_BLUR;
+        } else {
+            world->treeTransparency = 255.0f;
+        }
+    }
+}
+
 static void BarrelTouched(Barrel *b) {
     b->velocity.y = -60;
     b->velocity.x = 15.0f * ((GetRandomValue(0, 1) == 0) ? 1.0f : -1.0f);
@@ -311,12 +362,9 @@ static void HandleClick(GameWorld *world) {
     if (world->state == STATE_MENU) {
         // "start button" region -- centered box, matches menu draw below
         Rectangle startBtn = {WIDTH / 2.0f - 100, HEIGHT / 2.0f - 30, 200, 60};
-        TraceLog(LOG_INFO, "HandleClick: menu click at (%.1f,%.1f), btn=(%.1f,%.1f,%.1f,%.1f)",
-                 m.x, m.y, startBtn.x, startBtn.y, startBtn.width, startBtn.height);
         if (CheckCollisionPointRec(m, startBtn)) {
             world->round = 1;
             world->state = STATE_PLAYING;
-            TraceLog(LOG_INFO, "HandleClick: START pressed, state=PLAYING round=1");
         }
         return;
     }
@@ -373,19 +421,37 @@ static void SpawnRoundTick(GameWorld *world, float dt) {
 }
 
 void UpdateGameWorld(GameWorld *world, float dt) {
+    // IMPORTANT: the original only scales dt by GAME_TICK for the actual
+    // physics integration (velocity/position updates in movement() /
+    // animate_flying_barrel()). Everything else -- spawn_round's timer,
+    // animation frame timers, explosion timers -- uses real wall-clock
+    // time via sfClock_getElapsedTime(), completely unscaled. Mixing the
+    // two was the original bug in this port: using scaled dt everywhere
+    // made movement correct-ISH but everything crawled, because dt itself
+    // was being treated as "real seconds" when constants expected
+    // "real seconds * 20".
+    float physicsDt = dt * GAME_TICK;
+
     world->mousePos = GetMousePosition();
     world->cloudsX += world->cloudsSpeed * dt;
     if (world->cloudsX > WIDTH * 2) world->cloudsX = 0;
+    BlurTree(world); // runs every frame regardless of state, matching render_window()
 
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) HandleClick(world);
 
-    // debug/testing convenience: SPACE also starts the game from the menu
-    // (keyboard input is far more reliable to script/automate than
-    // synthetic mouse clicks under a window-manager-less test display)
-    if (world->state == STATE_MENU && IsKeyPressed(KEY_SPACE)) {
-        world->round = 1;
-        world->state = STATE_PLAYING;
-        TraceLog(LOG_INFO, "UpdateGameWorld: SPACE pressed, state=PLAYING round=1");
+    // ENTER: manual debug barrel spawn (1 hp), matches manage_keys()'s
+    // `spawn_barrel(g, 1)` on sfKeyEnter -- a real feature of the original,
+    // not a test-only shortcut.
+    if (world->state == STATE_PLAYING && IsKeyPressed(KEY_ENTER)) {
+        SpawnBarrel(world, 1);
+    }
+
+    // SPACE: force-spawn Gragas immediately if he doesn't exist yet,
+    // matches manage_keys()'s sfKeySpace branch. In the original this is
+    // available any time (menu included), independent of round number --
+    // it's a debug/cheat key, not a "start game" button.
+    if (IsKeyPressed(KEY_SPACE) && !world->gragas.exists) {
+        SpawnGragas(world);
     }
 
     if (world->state == STATE_MENU) return;
@@ -397,9 +463,9 @@ void UpdateGameWorld(GameWorld *world, float dt) {
         return;
     }
 
-    SpawnRoundTick(world, dt);
-    UpdateBarrels(world, dt);
-    AnimateGragas(world, dt);
+    SpawnRoundTick(world, dt);          // real-time spawn cadence
+    UpdateBarrels(world, dt, physicsDt); // physics uses scaled dt, timers use real dt
+    AnimateGragas(world, dt, physicsDt);
 }
 
 // ---- drawing ----
@@ -439,7 +505,8 @@ static void DrawBackground(GameWorld *world) {
 
     // tree, offset per TREE_OFFSET_X/Y * scale, matching create_background.c
     float scaleX = WIDTH / 384.0f, scaleY = HEIGHT / 224.0f;
-    DrawTextureEx(a->tree, (Vector2){TREE_OFFSET_X * scaleX, TREE_OFFSET_Y * scaleY}, 0, scaleX, WHITE);
+    DrawTextureEx(a->tree, (Vector2){TREE_OFFSET_X * scaleX, TREE_OFFSET_Y * scaleY}, 0, scaleX,
+                  (Color){255, 255, 255, (unsigned char)world->treeTransparency});
 
     DrawTexturePro(a->tiles, (Rectangle){0, 0, (float)a->tiles.width, (float)a->tiles.height},
                     dst, (Vector2){0, 0}, 0, WHITE);
@@ -473,12 +540,18 @@ static void DrawBarrel(GameWorld *world, Barrel *b) {
                 (Color){0, 0, 0, 70});
 
     if (b->dead) {
-        // explosion.png is a horizontal strip of EXPLOSION_WIDTH x EXPLOSION_HEIGHT
-        // frames, stepped every ~0.035s (animate_explosion in the original)
+        // explosion.png is a horizontal strip of 6 EXPLOSION_WIDTH x
+        // EXPLOSION_HEIGHT frames with a 3px gap between them (stride =
+        // EXPLOSION_WIDTH + 3, matching animate_explosion's
+        // `rect_anim.left += EXPLOSION_WIDTH + 3` -- using a bare
+        // EXPLOSION_WIDTH stride here was the earlier misalignment bug,
+        // it drifts more with every frame since the sheet actually has
+        // gaps between frames), stepped every ~0.035s.
+        int stride = EXPLOSION_WIDTH + 3;
+        int maxFrame = (a->explosion.width) / stride; // last full frame index
         int frame = b->explosionFrame;
-        int maxFrame = (a->explosion.width / EXPLOSION_WIDTH) - 1;
         if (frame > maxFrame) frame = maxFrame;
-        Rectangle src = {(float)(frame * EXPLOSION_WIDTH), 0, EXPLOSION_WIDTH, EXPLOSION_HEIGHT};
+        Rectangle src = {(float)(frame * stride), 0, EXPLOSION_WIDTH, EXPLOSION_HEIGHT};
         Rectangle dst = {center.x, center.y, EXPLOSION_WIDTH * 1.5f, EXPLOSION_HEIGHT * 1.5f};
         Vector2 origin = {EXPLOSION_WIDTH * 1.5f / 2, EXPLOSION_HEIGHT * 1.5f / 2};
         DrawTexturePro(a->explosion, src, dst, origin, 0, WHITE);

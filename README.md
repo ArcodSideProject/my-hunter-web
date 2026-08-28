@@ -27,6 +27,31 @@ reproduced 1:1 in `src/game.c`:
   is clear)
 - Gragas's own score slows the barrel spawn rate the same way
   (`spawn_rate -= gscore/30`, floor 0.3)
+- **Correct physics timing**: the original scales its delta-time by a
+  `GAME_TICK = 20` factor before using it anywhere in movement code
+  (`get_delta_t.c`) -- every velocity/acceleration constant in the game
+  (`GRAVITY`, barrel/Gragas speeds, etc.) was tuned against that scaled
+  value, not real seconds. This port reproduces that exactly: a
+  `physicsDt = dt * GAME_TICK` is computed once per frame and used only
+  for velocity/position integration, while animation timers, spawn
+  cadence, and the explosion/spawn-fade clocks all use real, unscaled
+  `dt` -- matching the original's split between `movement()` (scaled)
+  and `sfClock_getElapsedTime()`-based timers (real time). Getting this
+  wrong (using real-seconds dt for physics) made every earlier build of
+  this port ~20x slower than intended.
+- **ENTER**/**SPACE** debug keys, matching `manage_keys()`: ENTER
+  spawns a manual 1hp barrel, SPACE force-spawns Gragas immediately if
+  he doesn't already exist -- these are real features of the original,
+  not testing shortcuts.
+- **Pixel-perfect tree transparency on hover**, matching `blur_tree.c`:
+  when the mouse is over an actually-opaque pixel of the tree sprite
+  (checked via a CPU-side `Image` alpha lookup, not just the bounding
+  box), the tree gradually fades to ~59% opacity so you can see behind
+  it, and fades back to fully opaque when the mouse moves away.
+- Barrels now clamp exactly to the floor line when landing (`pos.y =
+  floorPos`) instead of potentially resting a few px into the ground on
+  a fast/coarse physics step, which the original didn't explicitly
+  guard against.
 
 **Not yet ported:** nothing outstanding on the assets/mechanics front —
 the real sprite sheets (`barrel.png`, `sumos.png`, `explosion.png`,

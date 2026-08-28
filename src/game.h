@@ -15,6 +15,14 @@
 #define FLOOR_HEIGHT 55
 #define G_FLOOR_HEIGHT 80
 
+// The original scales its delta-time by GAME_TICK before using it anywhere
+// (see get_delta_t.c: `dt = realSeconds * GAME_TICK`). Every velocity/
+// acceleration constant in this file (GRAVITY, barrel/Gragas speeds, etc.)
+// was tuned against that scaled dt, not real seconds -- so this port must
+// apply the same multiplier, or everything ends up exactly GAME_TICK times
+// slower than intended.
+#define GAME_TICK 20.0f
+
 #define MAX_BARRELS 128
 
 // Sprite-sheet frame layout, mirrored exactly from my.h
@@ -28,6 +36,7 @@
 
 #define TREE_OFFSET_X 173
 #define TREE_OFFSET_Y 82
+#define TREE_BLUR 8
 
 typedef struct {
     bool active;
@@ -82,6 +91,8 @@ typedef struct {
     Texture2D explosion;
     Texture2D startButton;
     Texture2D sky, clouds, mountain, farWoods, tiles, tree, frontGrass;
+    Image treeImage;       // CPU-side copy of the tree texture, for pixel-perfect
+                            // alpha hit-testing in the mouse-hover blur effect
     Font font;
     bool loaded;
 } Assets;
@@ -100,6 +111,7 @@ typedef struct {
 
     float cloudsX;
     float cloudsSpeed;
+    float treeTransparency; // 150..255, mirrors bg->tree_transparency in blur_tree.c
 
     Vector2 mousePos;
 

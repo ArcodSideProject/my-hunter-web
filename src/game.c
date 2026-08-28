@@ -3,8 +3,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define BARREL_W 60   // approximate on-screen size (3x scale of a ~20px sprite,
-#define BARREL_H 60   // matching the original's `sfVector2f barrel_scale = {3,3}`)
+// barrel.png is 22x28 (taller than wide), scaled 3x per the original's
+// `sfVector2f barrel_scale = {3, 3}` -> 66x84 on screen. Using a square
+// 60x60 box here (the earlier version of this file) stretched the sprite
+// into a square, which is why barrels looked square instead of the
+// original's slightly tall/rectangular shape.
+#define BARREL_W 66
+#define BARREL_H 84
 #define GRAGAS_W 100  // 2x scale of ~50px squat sprite
 #define GRAGAS_H 88
 
@@ -441,9 +446,29 @@ void UpdateGameWorld(GameWorld *world, float dt) {
 
     // ENTER: manual debug barrel spawn (1 hp), matches manage_keys()'s
     // `spawn_barrel(g, 1)` on sfKeyEnter -- a real feature of the original,
-    // not a test-only shortcut.
-    if (world->state == STATE_PLAYING && IsKeyPressed(KEY_ENTER)) {
-        SpawnBarrel(world, 1);
+    // not a test-only shortcut. Extended here so holding the key spawns
+    // faster and faster the longer it's held, rather than firing only
+    // once per press (per explicit request) -- ramps from one spawn every
+    // 0.35s down to one every 0.05s over 2 seconds of continuous hold.
+    if (world->state == STATE_PLAYING) {
+        if (IsKeyPressed(KEY_ENTER)) {
+            SpawnBarrel(world, 1);
+            world->enterHoldTime = 0;
+            world->enterSpawnAccum = 0;
+        } else if (IsKeyDown(KEY_ENTER)) {
+            world->enterHoldTime += dt;
+            world->enterSpawnAccum += dt;
+            float t = world->enterHoldTime / 2.0f;
+            if (t > 1.0f) t = 1.0f;
+            float interval = 0.35f - t * (0.35f - 0.05f);
+            if (world->enterSpawnAccum > interval) {
+                SpawnBarrel(world, 1);
+                world->enterSpawnAccum = 0;
+            }
+        } else {
+            world->enterHoldTime = 0;
+            world->enterSpawnAccum = 0;
+        }
     }
 
     // SPACE: force-spawn Gragas immediately if he doesn't exist yet,
@@ -469,7 +494,15 @@ void UpdateGameWorld(GameWorld *world, float dt) {
 }
 
 // ---- drawing ----
-static void DrawBackground(GameWorld *world) {
+// ---- background layers, split to match the original's actual draw order
+// (draw.c): sky/clouds/mountain/far_woods first, THEN spawning barrels,
+// THEN tiles (ground), THEN settled barrels, THEN Gragas, THEN tree,
+// THEN front_grass (in front of everything), THEN the mouse sight.
+// A single flat "draw all background, then all barrels/gragas" pass (the
+// earlier version of this file) put front_grass behind the barrels and
+// merged the two barrel layers, which is why grass appeared behind
+// barrels instead of in front.
+static void DrawSkyLayers(GameWorld *world) {
     Assets *a = &world->assets;
     if (!a->loaded) {
         ClearBackground((Color){135, 206, 235, 255});
@@ -481,18 +514,13 @@ static void DrawBackground(GameWorld *world) {
                      (Vector2){WIDTH * 0.3f, HEIGHT - FLOOR_HEIGHT - 60},
                      (Vector2){WIDTH * 0.6f, HEIGHT - FLOOR_HEIGHT - 220},
                      (Color){120, 130, 150, 255});
-        DrawRectangle(0, HEIGHT - FLOOR_HEIGHT, WIDTH, FLOOR_HEIGHT, (Color){90, 140, 60, 255});
         return;
     }
 
-    // Every background layer is a 384x224 source scaled up 3x to fill the
-    // 1152x672 window, exactly matching create_background.c's
-    // `resize = WIDTH/384, HEIGHT/224` (== 3,3).
     Rectangle dst = {0, 0, WIDTH, HEIGHT};
     DrawTexturePro(a->sky, (Rectangle){0, 0, (float)a->sky.width, (float)a->sky.height},
                     dst, (Vector2){0, 0}, 0, WHITE);
 
-    // clouds scroll horizontally and wrap, matching move_clouds()
     float cx = fmodf(world->cloudsX, WIDTH);
     Rectangle cloudsSrc = {0, 0, (float)a->clouds.width, (float)a->clouds.height};
     DrawTexturePro(a->clouds, cloudsSrc, (Rectangle){cx, 0, WIDTH, HEIGHT}, (Vector2){0, 0}, 0, WHITE);
@@ -502,14 +530,26 @@ static void DrawBackground(GameWorld *world) {
                     dst, (Vector2){0, 0}, 0, WHITE);
     DrawTexturePro(a->farWoods, (Rectangle){0, 0, (float)a->farWoods.width, (float)a->farWoods.height},
                     dst, (Vector2){0, 0}, 0, WHITE);
+}
 
-    // tree, offset per TREE_OFFSET_X/Y * scale, matching create_background.c
+static void DrawGroundLayer(GameWorld *world) {
+    Assets *a = &world->assets;
+    if (!a->loaded) {
+        DrawRectangle(0, HEIGHT - FLOOR_HEIGHT, WIDTH, FLOOR_HEIGHT, (Color){90, 140, 60, 255});
+        return;
+    }
+    Rectangle dst = {0, 0, WIDTH, HEIGHT};
+    DrawTexturePro(a->tiles, (Rectangle){0, 0, (float)a->tiles.width, (float)a->tiles.height},
+                    dst, (Vector2){0, 0}, 0, WHITE);
+}
+
+static void DrawTreeAndGrass(GameWorld *world) {
+    Assets *a = &world->assets;
+    if (!a->loaded) return;
     float scaleX = WIDTH / 384.0f, scaleY = HEIGHT / 224.0f;
     DrawTextureEx(a->tree, (Vector2){TREE_OFFSET_X * scaleX, TREE_OFFSET_Y * scaleY}, 0, scaleX,
                   (Color){255, 255, 255, (unsigned char)world->treeTransparency});
-
-    DrawTexturePro(a->tiles, (Rectangle){0, 0, (float)a->tiles.width, (float)a->tiles.height},
-                    dst, (Vector2){0, 0}, 0, WHITE);
+    Rectangle dst = {0, 0, WIDTH, HEIGHT};
     DrawTexturePro(a->frontGrass, (Rectangle){0, 0, (float)a->frontGrass.width, (float)a->frontGrass.height},
                     dst, (Vector2){0, 0}, 0, WHITE);
 }
@@ -535,8 +575,14 @@ static void DrawBarrel(GameWorld *world, Barrel *b) {
         return;
     }
 
-    // shadow, matching calculate_barrel_shadow's simple ellipse under the barrel
-    DrawEllipse((int)center.x, (int)(r.y + r.height - 4), (int)(r.width / 2.2f), 6,
+    // shadow, matching calculate_barrel_shadow: fixed at floor level
+    // (HEIGHT - FLOOR_HEIGHT - 45), NOT following the barrel's current Y --
+    // the original's shadow only ever sits on the ground, shrinking/growing
+    // by how high the barrel currently is (rect.top/20), which reads as a
+    // classic "shadow on the floor below a jumping object" effect.
+    float shadowY = HEIGHT - FLOOR_HEIGHT - 45.0f;
+    float shadowRadius = (r.y > 5 * 20) ? r.y / 20.0f : 5.0f;
+    DrawEllipse((int)center.x, (int)shadowY, (int)shadowRadius, (int)(shadowRadius * 0.4f),
                 (Color){0, 0, 0, 70});
 
     if (b->dead) {
@@ -584,9 +630,13 @@ static void DrawGragas(GameWorld *world) {
         return;
     }
 
-    DrawEllipse((int)(r.x + r.width / 2), (int)(HEIGHT - G_FLOOR_HEIGHT - 4),
-                (int)(r.width / 2.5f), 8, (Color){0, 0, 0, 60});
-
+    // shadow, matching calculate_shadow: fixed at HEIGHT - G_FLOOR_HEIGHT - 40,
+    // radius grows with height off the ground (rect.top/20), same formula
+    // as the barrel shadow.
+    float gShadowY = HEIGHT - G_FLOOR_HEIGHT - 40.0f;
+    float gShadowRadius = (r.y > 5 * 20) ? r.y / 20.0f : 5.0f;
+    DrawEllipse((int)(r.x + r.width / 2), (int)gShadowY,
+                (int)gShadowRadius, (int)(gShadowRadius * 0.4f), (Color){0, 0, 0, 60});
     // sumos.png layout mirrors rect_anim in the original: standing/spawn
     // frames use STANDING_GRAGAS_WIDTH/HEIGHT at a Y offset, squatting/walk
     // frames use SQUATTING_GRAGAS_WIDTH/HEIGHT starting at Y=0.
@@ -608,7 +658,23 @@ static void DrawGragas(GameWorld *world) {
     if (src.x + src.width > a->sumos.width) src.x = 0;
     if (src.y + src.height > a->sumos.height) src.y = 0;
 
-    Rectangle dst = {r.x, r.y, r.width, r.height};
+    // Render at the frame's NATIVE size * the original's fixed 2x scale
+    // (`create_sprite(gragas_texture, (v2f){2, 2})`), NOT stretched into
+    // a single fixed box. Squatting (50x44) and standing (66x62) frames
+    // are genuinely different sizes in the original -- forcing them both
+    // into one fixed destination rect (GragasRect(), used for physics)
+    // squashed/stretched the sprite and visibly shifted its apparent
+    // vertical position every time the animation state changed (spawn
+    // <-> walk, jump <-> stand), which is what read as "weird up and
+    // down jumps". Anchor to the bottom-center of the physics rect so
+    // the feet stay planted on the ground regardless of frame height.
+    float renderW = src.width * 2.0f;
+    float renderH = src.height * 2.0f;
+    Rectangle dst = {
+        r.x + r.width / 2 - renderW / 2,
+        r.y + r.height - renderH,
+        renderW, renderH
+    };
     DrawTexturePro(a->sumos, src, dst, (Vector2){0, 0}, 0, WHITE);
 }
 
@@ -623,11 +689,12 @@ static void DrawHUD(GameWorld *world) {
 }
 
 void DrawGameWorld(GameWorld *world) {
-    DrawBackground(world);
+    DrawSkyLayers(world);
     Assets *a = &world->assets;
     Font f = a->loaded ? a->font : GetFontDefault();
 
     if (world->state == STATE_MENU) {
+        DrawGroundLayer(world);
         const char *title = "MY HUNTER";
         Vector2 tsize = MeasureTextEx(f, title, 56, 1);
         DrawTextEx(f, title, (Vector2){WIDTH / 2 - tsize.x / 2, HEIGHT / 2 - 140}, 56, 1,
@@ -644,13 +711,25 @@ void DrawGameWorld(GameWorld *world) {
             DrawTextEx(f, label, (Vector2){startBtn.x + startBtn.width / 2 - lsize.x / 2,
                        startBtn.y + startBtn.height / 2 - 14}, 28, 1, WHITE);
         }
+        DrawTreeAndGrass(world);
         return;
     }
 
+    // Real draw order, matching draw_on_screen() in draw.c exactly:
+    // sky layers (done above) -> spawning barrels -> ground/tiles ->
+    // settled barrels -> Gragas -> tree -> front_grass (in front of
+    // everything drawn so far) -> HUD text on top of that.
     for (int i = 0; i < MAX_BARRELS; i++) {
-        if (world->barrels[i].active) DrawBarrel(world, &world->barrels[i]);
+        Barrel *b = &world->barrels[i];
+        if (b->active && b->spawning) DrawBarrel(world, b);
+    }
+    DrawGroundLayer(world);
+    for (int i = 0; i < MAX_BARRELS; i++) {
+        Barrel *b = &world->barrels[i];
+        if (b->active && !b->spawning) DrawBarrel(world, b);
     }
     DrawGragas(world);
+    DrawTreeAndGrass(world);
     DrawHUD(world);
 
     if (world->state == STATE_GAME_OVER) {

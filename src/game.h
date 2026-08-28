@@ -113,6 +113,9 @@ typedef struct {
     float cloudsSpeed;
     float treeTransparency; // 150..255, mirrors bg->tree_transparency in blur_tree.c
 
+    float enterHoldTime;    // seconds ENTER has been held continuously
+    float enterSpawnAccum;  // seconds since the last hold-triggered spawn
+
     Vector2 mousePos;
 
     Assets assets;

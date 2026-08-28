@@ -18,18 +18,17 @@ static void walking_animation(gragas_t *gragas, float rawDt)
 static void touching_barrel(gragas_t *gragas, barrel_t *barrel)
 {
     // NOTE: the original used my_round(gragas->rect.x)==my_round(barrel->rect.x),
-    // rounding both X positions to the nearest HUNDRED pixels. That's a
-    // very coarse bucket -- two positions up to ~90px apart can still
-    // round to the same hundred and register as a "touch", letting
-    // Gragas kill a barrel well before he's actually next to it. That's
-    // exactly what reads as the explosion "playing like it was shot
-    // very far": the explosion animation plays at the barrel's real
-    // (still distant) position while Gragas is still visibly
-    // approaching. Replaced with an actual proximity check tight
-    // enough to require them to be genuinely close/overlapping,
-    // matching how player clicks already require literal overlap
-    // (frect_contains) in barrel_touch.c.
-    if (ABS(gragas->rect.x - barrel->rect.x) < gragas->rect.width) {
+    // rounding both X positions to the nearest HUNDRED pixels, letting
+    // Gragas kill a barrel up to ~90px away. A first fix attempt
+    // replaced that with `< gragas->rect.width` (his full sprite
+    // bounding box, 100px) as the threshold -- but that's still far
+    // too loose: real measured gaps at kill time were consistently
+    // 90-99px, i.e. Gragas could still pop a barrel that's visually a
+    // full body-width away from him, which is exactly what read as
+    // "barrel goes nonsense when exploding". Tightened to a genuinely
+    // small, visually-tight proximity (30px) so the kill only fires
+    // once he's actually standing right next to the barrel.
+    if (ABS(gragas->rect.x - barrel->rect.x) < 30.0f) {
         if (!barrel->dead) {
             kill_barrel(barrel);
             gragas->gscore->number++;

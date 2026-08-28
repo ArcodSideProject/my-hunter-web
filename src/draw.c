@@ -39,17 +39,35 @@ static void draw_text_int(textint_t *t, Font font, bool hasFont)
 
 static void draw_enter_hint(game_t *g)
 {
-    // Explicit request: a visible hint that holding ENTER spawns more
-    // barrels. Placed bottom-left, small and unobtrusive, only during
-    // actual gameplay (not the menu or the game-over screen, which
-    // have their own separate messaging).
-    const char *hint = "Hold ENTER to spawn more barrels";
-    int fontSize = 20;
-    Vector2 pos = {16, HEIGHT - 60};
+    // Per explicit request: "PRESS ENTER" positioned behind the tree,
+    // only really readable once the player hovers the mouse over the
+    // tree and its transparency drops (blur_tree.c fades it from fully
+    // opaque 255 down to 150 while hovered). Drawn in the gameplay pass
+    // (BEFORE the tree, in z-order) so the tree sprite naturally
+    // occludes/reveals it depending on its current transparency,
+    // instead of always floating on top of everything.
+    const char *hint = "PRESS ENTER";
+    int fontSize = 28;
+    float treeX = TREE_OFFSET_X * g->resize.x;
+    float treeY = TREE_OFFSET_Y * g->resize.y;
+    float treeW = 113 * g->resize.x;
+    float treeH = 123 * g->resize.y;
+    Font f = g->hasFont ? g->font : GetFontDefault();
+    Vector2 size = MeasureTextEx(f, hint, fontSize, 1);
+    Vector2 pos = { treeX + treeW / 2 - size.x / 2, treeY + treeH / 2 - size.y / 2 };
+    // fade the hint's own alpha in step with the tree's transparency:
+    // tree_transparency ranges 150 (hovered/faded) .. 255 (opaque), so
+    // remap that range to a full 0..255 alpha instead of the raw
+    // 255-transparency value (which would only ever reach ~105/255 at
+    // most and look too dim even at maximum fade).
+    float fadeAmount = (255.0f - (float)g->bg->tree_transparency) / (255.0f - 150.0f);
+    if (fadeAmount < 0) fadeAmount = 0;
+    if (fadeAmount > 1) fadeAmount = 1;
+    unsigned char alpha = (unsigned char)(fadeAmount * 255.0f);
     if (g->hasFont) {
-        DrawTextEx(g->font, hint, pos, fontSize, 1, (Color){255, 255, 255, 200});
+        DrawTextEx(f, hint, pos, fontSize, 1, (Color){255, 220, 120, alpha});
     } else {
-        DrawText(hint, (int)pos.x, (int)pos.y, fontSize, (Color){255, 255, 255, 200});
+        DrawText(hint, (int)pos.x, (int)pos.y, fontSize, (Color){255, 220, 120, alpha});
     }
 }
 
@@ -68,18 +86,14 @@ void draw_on_screen_background_and_gameplay(game_t *g)
     }
     draw_text_int(g->score, g->font, g->hasFont);
     draw_text_int(g->round, g->font, g->hasFont);
+    if (!g->in_menu && !g->game_over)
+        draw_enter_hint(g);
 }
 
 void draw_on_screen_foreground(game_t *g)
 {
     draw_sprite(&g->bg->tree);
     draw_sprite(&g->bg->front_grass);
-    // Drawn AFTER front_grass (not before, in the gameplay pass where
-    // it was originally placed) -- front_grass is a full-width opaque
-    // strip covering roughly the bottom ~13% of the screen, which was
-    // completely painting over the hint text at its old position.
-    if (!g->in_menu && !g->game_over)
-        draw_enter_hint(g);
     draw_sprite(&g->sight);
 }
 

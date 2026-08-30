@@ -44,7 +44,16 @@ int rd_5(float *spawn_rate, int *barrel_health, game_t *g)
 {
     (*spawn_rate) = 6;
     (*barrel_health) = 1 + rand() % 2;
-    if (g->barrels_spawned > 70 && g->barrel_count == 0) {
+    // NOTE: natural spawning in spawn_round() is gated by
+    // "barrels_spawned < 70", so the counter can reach at most exactly
+    // 70 without an off-path spawn (e.g. the ENTER key in keys.c, which
+    // calls spawn_barrel() directly, bypassing that gate). The original
+    // ">" check here meant the round could only ever end if a player
+    // pressed ENTER to push the count past 70 -- impossible on
+    // touch-only platforms (mobile), where the round could never
+    // finish on its own. Using ">=" makes the natural spawn cap alone
+    // sufficient to trigger the win/end condition.
+    if (g->barrels_spawned >= 70 && g->barrel_count == 0) {
         g->game_over = true;
         return 1;
     }

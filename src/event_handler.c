@@ -20,6 +20,29 @@ void event_handler(game_t *g)
 {
     if (WindowShouldClose())
         g->game_over = true;
+
+    // Touch handling (mobile/web): raylib-web's synthesized mouse click
+    // from a tap is flaky -- EmscriptenTouchCallback (rcore_web.c)
+    // updates the mouse *position* on touch, but never sets the mouse
+    // *button* state itself; that only comes from the browser's own
+    // separately-fired synthesized mousedown/mouseup, whose position
+    // can lag one frame behind the touch position update. In practice
+    // this means the first tap silently updates the cursor position
+    // but the click "misses", and only the second tap (now at the
+    // right position) actually registers -- the double-tap-to-click
+    // bug. Fixed by detecting the touch press transition directly via
+    // raylib's touch API (unaffected by the synthesized-mouse timing
+    // issue) and driving the click from that instead, on top of --
+    // not instead of -- the normal mouse path, so desktop behavior is
+    // completely unchanged.
+    static bool wasTouching = false;
+    bool isTouching = GetTouchPointCount() > 0;
+    if (isTouching && !wasTouching) {
+        g->mpos = GetTouchPosition(0);
+        manage_mouse_click(g);
+    }
+    wasTouching = isTouching;
+
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
         manage_mouse_click(g);
     int key = GetKeyPressed();

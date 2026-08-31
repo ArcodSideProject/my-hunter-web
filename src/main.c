@@ -253,7 +253,11 @@ static void ResetGameKeepAssets(game_t *g)
     g->enter_spawn_accum = 0;
     g->has_saved = false;
     g->board_loaded = false;
-    g->final_wave_spawned = false;
+    g->final_wave_started = false;
+    g->final_wave_done = false;
+    g->final_wave_queue_count = 0;
+    g->final_wave_queue_next = 0;
+    g->final_wave_spawn_timer = 0;
     create_texts(g);
 }
 

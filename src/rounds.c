@@ -6,7 +6,7 @@
 */
 #include "my.h"
 
-static void get_round_settings(game_t *g, float *spawn_rate, int *barrel_health)
+static void get_round_settings(game_t *g, float *spawn_rate, int *barrel_health, float rawDt)
 {
     switch (g->round->number) {
     case 1:
@@ -22,7 +22,7 @@ static void get_round_settings(game_t *g, float *spawn_rate, int *barrel_health)
         g->round->number += rd_4(spawn_rate, barrel_health, g->barrels_spawned);
         break;
     case 5:
-        g->round->number += rd_5(spawn_rate, barrel_health, g);
+        g->round->number += rd_5(spawn_rate, barrel_health, g, rawDt);
         break;
     }
 }
@@ -35,7 +35,7 @@ void spawn_round(game_t *g, float rawDt)
     int barrel_health = 1;
     if (g->in_menu)
         return;
-    get_round_settings(g, &spawn_rate, &barrel_health);
+    get_round_settings(g, &spawn_rate, &barrel_health, rawDt);
 
     if (g->round->number == 2 && g->gragas == NULL) {
         g->gragas = malloc(sizeof(gragas_t));

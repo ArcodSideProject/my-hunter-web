@@ -215,7 +215,16 @@ typedef struct game {
     scoreboard_entry_t board[SCOREBOARD_MAX_ENTRIES]; // local cache of the full list, fetched once on game over
     int board_count;
     bool board_loaded;
-    bool final_wave_spawned;  // guards the one-time scoreboard-barrel final wave
+
+    // Final wave (explicit user request): scoreboard-entry barrels are
+    // trickled in one at a time at a high rate during round 5's last
+    // wave, not spawned all at once. See spawn_scoreboard_final_wave.c.
+    bool final_wave_started; // queue fetched, trickle spawn in progress
+    bool final_wave_done;    // every queued entry has been spawned (may still be alive)
+    scoreboard_entry_t final_wave_queue[SCOREBOARD_MAX_ENTRIES];
+    int final_wave_queue_count;
+    int final_wave_queue_next; // index of the next entry still to spawn
+    float final_wave_spawn_timer;
 } game_t;
 
 ///////////////////////////////////////////////
@@ -281,7 +290,7 @@ void create_gragas(gragas_t *gragas, Texture2D gragas_texture);
 rsprite_t create_start_button(Texture2D start_button_texture);
 
 void spawn_barrel(game_t *g, int max_health);
-void spawn_scoreboard_final_wave(game_t *g);
+void spawn_scoreboard_final_wave_tick(game_t *g, float rawDt);
 void bounce_on_border(barrel_t *barrel, float rawDt);
 void for_touched_barrels(barrel_t *barrel, Vector2 mpos);
 void kill_barrel(barrel_t *barrel);
@@ -304,6 +313,6 @@ int rd_1(float *spawn_rate, int *barrel_health, int barrels_spawned);
 int rd_2(float *spawn_rate, int *barrel_health, int barrels_spawned);
 int rd_3(float *spawn_rate, int *barrel_health, int barrels_spawned);
 int rd_4(float *spawn_rate, int *barrel_health, int barrels_spawned);
-int rd_5(float *spawn_rate, int *barrel_health, game_t *g);
+int rd_5(float *spawn_rate, int *barrel_health, game_t *g, float rawDt);
 
 #endif /* !MY_H */

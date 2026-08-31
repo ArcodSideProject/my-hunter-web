@@ -40,7 +40,7 @@ int rd_4(float *spawn_rate, int *barrel_health, int barrels_spawned)
     return 0;
 }
 
-int rd_5(float *spawn_rate, int *barrel_health, game_t *g)
+int rd_5(float *spawn_rate, int *barrel_health, game_t *g, float rawDt)
 {
     (*spawn_rate) = 6;
     (*barrel_health) = 1 + rand() % 2;
@@ -53,19 +53,28 @@ int rd_5(float *spawn_rate, int *barrel_health, game_t *g)
     // touch-only platforms (mobile), where the round could never
     // finish on its own. Using ">=" makes the natural spawn cap alone
     // sufficient to trigger the win/end condition.
+    //
+    // Once the natural supply is exhausted, the scoreboard "final wave"
+    // (explicit user request) takes over: it trickles in one barrel
+    // per known scoreboard entry at a high rate (not all at once), so
+    // it must keep being ticked every frame regardless of
+    // barrel_count -- spawning the first queued barrel would otherwise
+    // make barrel_count>0 and prevent this branch from running again
+    // before the round could ever finish spawning the rest of the
+    // queue. Once final_wave_started (queue fetched) but not yet
+    // final_wave_done (still spawning entries in), always tick,
+    // independent of barrel_count.
+    if (g->final_wave_started && !g->final_wave_done) {
+        spawn_scoreboard_final_wave_tick(g, rawDt);
+        return 0;
+    }
     if (g->barrels_spawned >= 70 && g->barrel_count == 0) {
-        // Scoreboard "final wave" (explicit user request): before
-        // actually ending the round, spawn one extra barrel per known
-        // scoreboard entry. spawn_scoreboard_final_wave() bumps
-        // barrels_spawned/barrel_count itself via spawn_barrel(), so
-        // this same condition naturally re-evaluates false until that
-        // wave is cleared too -- the round only truly ends once every
-        // scoreboard barrel is dead as well. Guarded internally so it
-        // only ever runs once.
-        if (!g->final_wave_spawned) {
-            spawn_scoreboard_final_wave(g);
+        if (!g->final_wave_started) {
+            spawn_scoreboard_final_wave_tick(g, rawDt);
             return 0;
         }
+        // final_wave_started && final_wave_done && barrel_count==0:
+        // the whole wave has both fully spawned and been cleared.
         g->game_over = true;
         return 1;
     }

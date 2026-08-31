@@ -13,6 +13,11 @@ void manage_keys(game_t *g, int key_code)
 {
     if (key_code == KEY_MARKER_ENTER) {
         spawn_barrel(g, 1);
+        // ENTER-spawned barrels don't award score (explicit user
+        // request) -- the barrel we just appended is the new tail.
+        barrel_t *tail = g->barrel;
+        while (tail->next_barrel != NULL) tail = tail->next_barrel;
+        tail->gives_score = false;
     } if (key_code == KEY_MARKER_SPACE) {
         if (g->gragas == NULL) {
             g->gragas = malloc(sizeof(gragas_t));

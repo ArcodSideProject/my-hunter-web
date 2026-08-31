@@ -71,6 +71,12 @@ void event_handler(game_t *g)
             float interval = 0.4f - eased * (0.4f - 0.015f);
             while (g->enter_spawn_accum > interval) {
                 spawn_barrel(g, 1);
+                // ENTER-spawned barrels don't award score (explicit
+                // user request) -- same as the single-press path in
+                // keys.c.
+                barrel_t *tail = g->barrel;
+                while (tail->next_barrel != NULL) tail = tail->next_barrel;
+                tail->gives_score = false;
                 g->enter_spawn_accum -= interval;
             }
         } else {

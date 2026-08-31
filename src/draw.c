@@ -20,7 +20,7 @@ static void draw_background(bg_t *bg)
 // barrel's own live global bounds -- no separate tracking needed.
 static void draw_scoreboard_name_label(barrel_t *barrel, Font font, bool hasFont)
 {
-    if (barrel->scoreboard_name == NULL || barrel->dead)
+    if (barrel->scoreboard_name[0] == '\0' || barrel->dead)
         return;
     Font f = hasFont ? font : GetFontDefault();
     int fontSize = 18;

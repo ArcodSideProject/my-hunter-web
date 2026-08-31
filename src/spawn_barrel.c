@@ -54,8 +54,7 @@ void spawn_scoreboard_final_wave(game_t *g)
         // The barrel we just appended is the new tail of the list.
         barrel_t *tail = g->barrel;
         while (tail->next_barrel != NULL) tail = tail->next_barrel;
-        tail->scoreboard_name = malloc(strlen(entries[i].name) + 1);
-        if (tail->scoreboard_name != NULL)
-            strcpy(tail->scoreboard_name, entries[i].name);
+        strncpy(tail->scoreboard_name, entries[i].name, SCOREBOARD_NAME_MAX);
+        tail->scoreboard_name[SCOREBOARD_NAME_MAX] = '\0';
     }
 }

@@ -47,7 +47,6 @@ void kill_barrel(barrel_t *barrel)
 
 void free_barrel(barrel_t *barrel)
 {
-    free(barrel->scoreboard_name);
     free(barrel);
 }
 
@@ -56,8 +55,10 @@ static void remove_in_list(barrel_t *barrel, int *barrel_count, int *score_nb)
     barrel_t *save;
     do {
         if (barrel->next_barrel->health <= 0) {
+            bool givesScore = barrel->next_barrel->gives_score;
             kill_barrel(barrel->next_barrel);
-            (*score_nb)++;
+            if (givesScore)
+                (*score_nb)++;
         } if (barrel->next_barrel->explosion_state > 5) {
             (*barrel_count)--;
             save = barrel->next_barrel->next_barrel;
@@ -78,8 +79,10 @@ void remove_dead_barrels(game_t *g)
     while (g->barrel != NULL && (g->barrel->health <= 0 ||
     g->barrel->explosion_state > 5)) {
         if (g->barrel->health <= 0) {
+            bool givesScore = g->barrel->gives_score;
             kill_barrel(g->barrel);
-            g->score->number++;
+            if (givesScore)
+                g->score->number++;
         } if (g->barrel->explosion_state > 5) {
             save = g->barrel->next_barrel;
             g->barrel_count--;

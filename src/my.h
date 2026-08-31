@@ -113,11 +113,16 @@ typedef struct barrel {
     v2f velocity;
     float angle;
     rshape_t shadow;
-    // Scoreboard "final wave" barrel (see scoreboard.c): NULL for every
-    // normal barrel. When set, this barrel represents one scoreboard
-    // entry, and its name is drawn following the barrel every frame in
-    // a semi-transparent label until it dies.
-    char *scoreboard_name;
+    // Scoreboard "final wave" barrel (see scoreboard.c): empty string
+    // ("") for every normal barrel -- no label drawn. Fixed-size (no
+    // malloc/free) since it's always either empty or one scoreboard
+    // name, capped at SCOREBOARD_NAME_MAX.
+    char scoreboard_name[SCOREBOARD_NAME_MAX + 1];
+    // Whether killing this barrel awards g->score (explicit user
+    // request: barrels spawned by holding ENTER shouldn't count).
+    // Every normal spawn path sets this true; only manage_keys()'s
+    // ENTER handler sets it false.
+    bool gives_score;
     struct barrel *next_barrel;
 } barrel_t;
 
@@ -196,17 +201,20 @@ typedef struct game {
 
     // Scoreboard (explicit user request, not in the original): a global,
     // server-backed high score list keyed by a player-chosen pseudo.
-    // See scoreboard.c/scoreboard.h and web/scoreboard.js.
-    char pseudo[SCOREBOARD_NAME_MAX + 1];
-    char pseudo_edit_buf[SCOREBOARD_NAME_MAX + 1]; // live text-entry buffer
-    bool editing_pseudo;      // true while the pseudo text field has focus
-    bool score_submitted;     // guards against double-submitting this run
-    scoreboard_result_t last_result; // best/tries from the most recent submit
+    // The end screen IS the scoreboard (least friction: no separate
+    // "enter your name" gate) -- pseudo defaults to a random LoL-themed
+    // word/combo, editable inline, with a "roll" button for another
+    // random one. See scoreboard.c/scoreboard.h and web/shell.html's
+    // pseudo-input glue (mobile needs a real HTML <input> to get an
+    // on-screen keyboard; raylib's canvas can't trigger one itself).
+    char pseudo[SCOREBOARD_NAME_MAX + 1];       // last name actually committed to the server
+    char pseudo_edit_buf[SCOREBOARD_NAME_MAX + 1]; // live text field contents (may differ from pseudo while typing)
+    bool score_submitted;     // guards against double-submitting this run under the same name
+    scoreboard_result_t last_result; // best/tries for the currently committed pseudo
     bool has_last_result;
     scoreboard_entry_t board[SCOREBOARD_MAX_ENTRIES]; // cached full list
     int board_count;
     bool board_loaded;
-    bool show_scoreboard;     // true while the scoreboard screen overlay is open
     bool final_wave_spawned;  // guards the one-time scoreboard-barrel final wave
 } game_t;
 
@@ -243,7 +251,10 @@ void manage_mouse_click(game_t *g);
 void manage_keys(game_t *g, int key_code);
 void move_sight_to_cursor(game_t *g);
 void blur_tree(game_t *g);
-void text_input_update(char *buf, int max_len);
+void pseudo_input_show(float x, float y, float w, float h, float font_size, const char *value);
+void pseudo_input_hide(void);
+bool pseudo_input_update(char *buf, int max_len);
+void scoreboard_random_pseudo(char *out, int max_len);
 
 void animate_gragas(gragas_t *gragas, float dt, float rawDt, barrel_t *barrel);
 void animate_gragas_spawn(gragas_t *gragas, float rawDt);

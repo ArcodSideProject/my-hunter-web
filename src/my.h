@@ -201,18 +201,18 @@ typedef struct game {
 
     // Scoreboard (explicit user request, not in the original): a global,
     // server-backed high score list keyed by a player-chosen pseudo.
-    // The end screen IS the scoreboard (least friction: no separate
-    // "enter your name" gate) -- pseudo defaults to a random LoL-themed
-    // word/combo, editable inline, with a "roll" button for another
-    // random one. See scoreboard.c/scoreboard.h and web/shell.html's
+    // Local-first model (explicit user request, replacing an earlier
+    // auto-submit-on-every-edit design that was buggy/surprising):
+    // the pseudo field and board are edited/browsed purely locally;
+    // nothing reaches the server until the player explicitly clicks
+    // Save. See scoreboard.c/scoreboard.h and web/shell.html's
     // pseudo-input glue (mobile needs a real HTML <input> to get an
     // on-screen keyboard; raylib's canvas can't trigger one itself).
-    char pseudo[SCOREBOARD_NAME_MAX + 1];       // last name actually committed to the server
-    char pseudo_edit_buf[SCOREBOARD_NAME_MAX + 1]; // live text field contents (may differ from pseudo while typing)
-    bool score_submitted;     // guards against double-submitting this run under the same name
-    scoreboard_result_t last_result; // best/tries for the currently committed pseudo
-    bool has_last_result;
-    scoreboard_entry_t board[SCOREBOARD_MAX_ENTRIES]; // cached full list
+    char pseudo[SCOREBOARD_NAME_MAX + 1];       // last name actually committed to the server via Save
+    char pseudo_edit_buf[SCOREBOARD_NAME_MAX + 1]; // live text field contents (may differ from pseudo until Save)
+    bool has_saved;            // true once Save has been clicked at least once this run
+    scoreboard_result_t last_result; // best/tries returned by the last successful Save
+    scoreboard_entry_t board[SCOREBOARD_MAX_ENTRIES]; // local cache of the full list, fetched once on game over
     int board_count;
     bool board_loaded;
     bool final_wave_spawned;  // guards the one-time scoreboard-barrel final wave

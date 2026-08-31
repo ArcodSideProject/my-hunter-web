@@ -34,9 +34,11 @@ static Rectangle PlayAgainButtonRect(game_t *g)
 }
 
 // Scoreboard UI layout: the game-over screen IS the scoreboard --
-// pseudo row (editable text field + roll button) at the top, live
-// board below (highlighting the current pseudo's row), Play Again
-// still available (drawn separately, partially behind the tree).
+// pseudo row (editable text field + roll button) at the top, a Save
+// button to actually commit to the server (local-first: nothing is
+// sent until clicked), live local board below as a proper 3-column
+// table (Name / Score / Tries), Play Again still available (drawn
+// separately, partially behind the tree).
 static Rectangle PseudoFieldRect(void)
 {
     return (Rectangle){ WIDTH / 2.0f - 160, HEIGHT * 0.07f, 260, 40 };
@@ -48,42 +50,38 @@ static Rectangle RollButtonRect(void)
     return (Rectangle){ field.x + field.width + 10, field.y, 40, 40 };
 }
 
-static void SubmitCurrentScore(game_t *g, const char *rename_from)
+static Rectangle SaveButtonRect(void)
 {
-    if (g->score_submitted) return;
-    scoreboard_submit(g->pseudo, g->score->number, rename_from, &g->last_result);
-    g->has_last_result = true;
-    g->score_submitted = true;
-    // Live-refresh the board so the just-submitted score shows
-    // immediately (explicit user request: editing your name should
-    // live-update the scoreboard you're looking at -- the same applies
-    // to a fresh submission).
-    g->board_count = scoreboard_fetch_all(g->board);
-    g->board_loaded = true;
+    Rectangle field = PseudoFieldRect();
+    return (Rectangle){ field.x, field.y + field.height + 8, field.width + 50, 34 };
 }
 
-// Commits pseudo_edit_buf as the active pseudo: saves it locally,
-// re-submits this run's score under the new name (explicit user
-// request: entering an already-taken name just makes you that person,
-// no ownership/password), and refreshes the board so the change is
-// reflected live. Passes the previous pseudo as renameFrom so the
-// server replaces that row instead of leaving a duplicate behind
-// (explicit user request: editing your name shouldn't create a second
-// entry).
-static void CommitPseudo(game_t *g)
+// Column x-offsets within the table, relative to its left edge.
+#define COL_NAME_X 0
+#define COL_SCORE_X 240
+#define COL_TRIES_X 330
+#define TABLE_WIDTH 420
+
+static void SaveScore(game_t *g)
 {
-    if (g->pseudo_edit_buf[0] == '\0') return; // ignore an empty field, keep the previous pseudo
-    if (strcmp(g->pseudo, g->pseudo_edit_buf) == 0 && g->has_last_result)
-        return; // no actual change
-    char previous[SCOREBOARD_NAME_MAX + 1];
-    strncpy(previous, g->pseudo, SCOREBOARD_NAME_MAX);
-    previous[SCOREBOARD_NAME_MAX] = '\0';
-    bool hadPrevious = g->has_last_result; // only rename if we'd actually committed something under `previous` already
+    // Local-first (explicit user request): only this explicit click
+    // ever talks to the server. rename_from is the pseudo the LAST
+    // successful Save used this run (not necessarily g->pseudo, which
+    // may have been typed further since) -- NULL on the very first
+    // Save of the run, so nothing gets renamed away on that one.
+    const char *renameFrom = g->has_saved ? g->pseudo : NULL;
+    if (g->pseudo_edit_buf[0] == '\0') return; // ignore an empty field
+    if (renameFrom && strcmp(renameFrom, g->pseudo_edit_buf) == 0)
+        renameFrom = NULL; // same name as last save -- not a rename, just another try
     strncpy(g->pseudo, g->pseudo_edit_buf, SCOREBOARD_NAME_MAX);
     g->pseudo[SCOREBOARD_NAME_MAX] = '\0';
     scoreboard_save_pseudo(g->pseudo);
-    g->score_submitted = false;
-    SubmitCurrentScore(g, hadPrevious ? previous : NULL);
+    scoreboard_submit(g->pseudo, g->score->number, renameFrom, &g->last_result);
+    g->has_saved = true;
+    // Refresh the local board snapshot so the just-saved score is
+    // reflected immediately.
+    g->board_count = scoreboard_fetch_all(g->board);
+    g->board_loaded = true;
 }
 
 static void DrawScoreboardScreen(game_t *g)
@@ -91,7 +89,12 @@ static void DrawScoreboardScreen(game_t *g)
     DrawRectangle(0, 0, WIDTH, HEIGHT, (Color){0, 0, 0, 160});
     Font f = g->hasFont ? g->font : GetFontDefault();
 
-    if (!g->has_last_result) SubmitCurrentScore(g, NULL);
+    // Fetch the board once when the game-over screen first appears --
+    // purely local/read-only after that until Save re-fetches it.
+    if (!g->board_loaded) {
+        g->board_count = scoreboard_fetch_all(g->board);
+        g->board_loaded = true;
+    }
 
     // Pseudo field: mirrors pseudo_edit_buf into the real HTML <input>
     // every frame (web) so mobile's on-screen keyboard can edit it;
@@ -113,13 +116,11 @@ static void DrawScoreboardScreen(game_t *g)
              ((int)(GetTime() * 2) % 2 == 0) ? "|" : "");
     DrawTextEx(f, display, (Vector2){field.x + 10, field.y + 9}, 22, 1, RAYWHITE);
 #endif
-    bool committed = pseudo_input_update(g->pseudo_edit_buf, SCOREBOARD_NAME_MAX);
-    if (committed) CommitPseudo(g);
-    // Any edit (even before commit) should feel "live" per the request
-    // -- once it no longer matches the last committed pseudo and isn't
-    // empty, commit it as soon as focus would naturally be lost (Play
-    // Again click, roll, etc. below); typing itself doesn't spam the
-    // server on every keystroke, only on blur/Enter/those actions.
+    pseudo_input_update(g->pseudo_edit_buf, SCOREBOARD_NAME_MAX);
+    // NOTE: purely local -- no auto-submit on Enter/blur anymore. The
+    // Enter/blur "committed" signal from pseudo_input_update is
+    // intentionally ignored here; Save (below) is now the only thing
+    // that ever talks to the server, per explicit user request.
 
     // Roll button: circular-arrow "refresh" icon (drawn procedurally --
     // an open ring plus a triangular arrowhead tangent to it at the
@@ -130,21 +131,12 @@ static void DrawScoreboardScreen(game_t *g)
     Color rollColor = CheckCollisionPointRec(g->mpos, roll) ? (Color){110, 110, 125, 255} : (Color){75, 75, 88, 255};
     DrawCircleV(rollCenter, roll.width / 2, rollColor);
     float r = roll.width / 2 - 9;
-    // Ring spans ~280 degrees (leaves a visible gap so it doesn't read
-    // as a plain closed circle), starting just past the arrowhead so
-    // the two connect smoothly into one continuous "arrow going around
-    // a circle" shape.
     float startAngle = -60.0f, endAngle = 200.0f;
     DrawRing(rollCenter, r - 3.0f, r, startAngle, endAngle, 32, RAYWHITE);
-    // Arrowhead: a small triangle centered ON the ring at its leading
-    // (end-angle) tip, pointing in the ring's tangent direction (i.e.
-    // the direction of travel if you were walking along the arc
-    // clockwise), so it reads as "the arrow continues in this
-    // direction" rather than pointing radially in/out.
     float endRad = endAngle * DEG2RAD;
     Vector2 ringTip = { rollCenter.x + cosf(endRad) * r, rollCenter.y + sinf(endRad) * r };
-    Vector2 tangent = { -sinf(endRad), cosf(endRad) }; // direction of travel along the arc
-    Vector2 outward = { cosf(endRad), sinf(endRad) };  // radially outward at the tip
+    Vector2 tangent = { -sinf(endRad), cosf(endRad) };
+    Vector2 outward = { cosf(endRad), sinf(endRad) };
     float headLen = 11, headWidth = 8;
     Vector2 tip = { ringTip.x + tangent.x * headLen * 0.6f, ringTip.y + tangent.y * headLen * 0.6f };
     Vector2 base1 = {
@@ -161,32 +153,63 @@ static void DrawScoreboardScreen(game_t *g)
 #if defined(PLATFORM_WEB)
         pseudo_input_set_value(g->pseudo_edit_buf); // push the roll into the HTML field explicitly
 #endif
-        CommitPseudo(g);
+    }
+
+    // Save button: the only thing that actually talks to the server.
+    Rectangle save = SaveButtonRect();
+    bool saveHover = CheckCollisionPointRec(g->mpos, save);
+    Color saveColor = saveHover ? (Color){80, 160, 90, 255} : (Color){60, 130, 70, 255};
+    DrawRectangleRounded(save, 0.25f, 8, saveColor);
+    const char *saveLabel = g->has_saved ? "Save" : "Save score";
+    Vector2 sls = MeasureTextEx(f, saveLabel, 18, 1);
+    DrawTextEx(f, saveLabel, (Vector2){save.x + save.width / 2 - sls.x / 2, save.y + save.height / 2 - sls.y / 2}, 18, 1, RAYWHITE);
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && saveHover) {
+        SaveScore(g);
     }
 
     char statsLine[64];
-    if (g->has_last_result && g->last_result.ok) {
-        snprintf(statsLine, sizeof(statsLine), "Best: %d   Tries: %d", g->last_result.best, g->last_result.tries);
+    if (g->has_saved && g->last_result.ok) {
+        snprintf(statsLine, sizeof(statsLine), "Saved -- Best: %d   Tries: %d", g->last_result.best, g->last_result.tries);
+    } else if (g->has_saved) {
+        snprintf(statsLine, sizeof(statsLine), "Save failed (offline?) -- Score: %d", g->score->number);
     } else {
-        snprintf(statsLine, sizeof(statsLine), "Score: %d (offline)", g->score->number);
+        snprintf(statsLine, sizeof(statsLine), "Score: %d -- not saved yet", g->score->number);
     }
-    Vector2 ss = MeasureTextEx(f, statsLine, 18, 1);
-    DrawTextEx(f, statsLine, (Vector2){WIDTH / 2.0f - ss.x / 2, field.y + field.height + 8}, 18, 1, (Color){220, 220, 220, 255});
+    Vector2 ss = MeasureTextEx(f, statsLine, 16, 1);
+    DrawTextEx(f, statsLine, (Vector2){WIDTH / 2.0f - ss.x / 2, save.y + save.height + 8}, 16, 1, (Color){220, 220, 220, 255});
 
-    // Live scoreboard list.
-    float listW = 420;
-    float listX = WIDTH / 2.0f - listW / 2;
-    float rowY = field.y + field.height + 40;
-    float rowH = 24;
+    // Live local scoreboard table (Name / Score / Tries columns).
+    float tableX = WIDTH / 2.0f - TABLE_WIDTH / 2;
+    float headerY = save.y + save.height + 34;
+    float rowH = 22;
+    Color headerColor = (Color){160, 160, 175, 255};
+    DrawTextEx(f, "NAME", (Vector2){tableX + COL_NAME_X, headerY}, 15, 1, headerColor);
+    DrawTextEx(f, "SCORE", (Vector2){tableX + COL_SCORE_X, headerY}, 15, 1, headerColor);
+    DrawTextEx(f, "TRIES", (Vector2){tableX + COL_TRIES_X, headerY}, 15, 1, headerColor);
+    DrawLineEx((Vector2){tableX, headerY + 20}, (Vector2){tableX + TABLE_WIDTH, headerY + 20}, 1, (Color){90, 90, 100, 255});
+
+    float rowY = headerY + 28;
     if (g->board_count == 0) {
-        DrawTextEx(f, "No scores yet.", (Vector2){listX, rowY}, 18, 1, (Color){200, 200, 200, 255});
+        DrawTextEx(f, "No scores yet.", (Vector2){tableX, rowY}, 16, 1, (Color){200, 200, 200, 255});
     }
-    for (int i = 0; i < g->board_count && rowY + rowH < HEIGHT * 0.82f; i++) {
-        char line[80];
-        snprintf(line, sizeof(line), "%2d. %-20s %6d (%d tries)",
-                 i + 1, g->board[i].name, g->board[i].best, g->board[i].tries);
-        bool isMe = strcmp(g->board[i].name, g->pseudo) == 0;
-        DrawTextEx(f, line, (Vector2){listX, rowY}, 18, 1, isMe ? (Color){255, 210, 90, 255} : RAYWHITE);
+    for (int i = 0; i < g->board_count && rowY + rowH < HEIGHT * 0.85f; i++) {
+        bool isMe = g->has_saved && strcmp(g->board[i].name, g->pseudo) == 0;
+        Color rowColor = isMe ? (Color){255, 210, 90, 255} : RAYWHITE;
+        char nameCell[SCOREBOARD_NAME_MAX + 1];
+        strncpy(nameCell, g->board[i].name, SCOREBOARD_NAME_MAX);
+        nameCell[SCOREBOARD_NAME_MAX] = '\0';
+        // Truncate long names so they don't run into the Score column.
+        Vector2 nameSize = MeasureTextEx(f, nameCell, 16, 1);
+        while (nameSize.x > COL_SCORE_X - 10 && strlen(nameCell) > 1) {
+            nameCell[strlen(nameCell) - 1] = '\0';
+            nameSize = MeasureTextEx(f, nameCell, 16, 1);
+        }
+        char scoreCell[16], triesCell[16];
+        snprintf(scoreCell, sizeof(scoreCell), "%d", g->board[i].best);
+        snprintf(triesCell, sizeof(triesCell), "%d", g->board[i].tries);
+        DrawTextEx(f, nameCell, (Vector2){tableX + COL_NAME_X, rowY}, 16, 1, rowColor);
+        DrawTextEx(f, scoreCell, (Vector2){tableX + COL_SCORE_X, rowY}, 16, 1, rowColor);
+        DrawTextEx(f, triesCell, (Vector2){tableX + COL_TRIES_X, rowY}, 16, 1, rowColor);
         rowY += rowH;
     }
 }
@@ -228,8 +251,8 @@ static void ResetGameKeepAssets(game_t *g)
     g->game_over = false;
     g->enter_hold_time = 0;
     g->enter_spawn_accum = 0;
-    g->score_submitted = false;
-    g->has_last_result = false;
+    g->has_saved = false;
+    g->board_loaded = false;
     g->final_wave_spawned = false;
     create_texts(g);
 }

@@ -42,7 +42,9 @@ void scoreboard_save_pseudo(const char *name);
 // with the resulting best/tries (or ok=false on failure). Blocking on
 // web via ASYNCIFY (already used elsewhere in this port for the loading
 // screen), so callers don't need their own async state machine.
-void scoreboard_submit(const char *name, int score, scoreboard_result_t *out);
+// rename_from: previous pseudo to replace/fold into `name` server-side
+// (pass NULL or an empty string for a normal submit with no rename).
+void scoreboard_submit(const char *name, int score, const char *rename_from, scoreboard_result_t *out);
 
 // Fetches the full board (sorted by best desc), writing up to
 // SCOREBOARD_MAX_ENTRIES into out_entries. Returns the number written,

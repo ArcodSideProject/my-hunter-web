@@ -48,10 +48,10 @@ static Rectangle RollButtonRect(void)
     return (Rectangle){ field.x + field.width + 10, field.y, 40, 40 };
 }
 
-static void SubmitCurrentScore(game_t *g)
+static void SubmitCurrentScore(game_t *g, const char *rename_from)
 {
     if (g->score_submitted) return;
-    scoreboard_submit(g->pseudo, g->score->number, &g->last_result);
+    scoreboard_submit(g->pseudo, g->score->number, rename_from, &g->last_result);
     g->has_last_result = true;
     g->score_submitted = true;
     // Live-refresh the board so the just-submitted score shows
@@ -66,17 +66,24 @@ static void SubmitCurrentScore(game_t *g)
 // re-submits this run's score under the new name (explicit user
 // request: entering an already-taken name just makes you that person,
 // no ownership/password), and refreshes the board so the change is
-// reflected live.
+// reflected live. Passes the previous pseudo as renameFrom so the
+// server replaces that row instead of leaving a duplicate behind
+// (explicit user request: editing your name shouldn't create a second
+// entry).
 static void CommitPseudo(game_t *g)
 {
     if (g->pseudo_edit_buf[0] == '\0') return; // ignore an empty field, keep the previous pseudo
     if (strcmp(g->pseudo, g->pseudo_edit_buf) == 0 && g->has_last_result)
         return; // no actual change
+    char previous[SCOREBOARD_NAME_MAX + 1];
+    strncpy(previous, g->pseudo, SCOREBOARD_NAME_MAX);
+    previous[SCOREBOARD_NAME_MAX] = '\0';
+    bool hadPrevious = g->has_last_result; // only rename if we'd actually committed something under `previous` already
     strncpy(g->pseudo, g->pseudo_edit_buf, SCOREBOARD_NAME_MAX);
     g->pseudo[SCOREBOARD_NAME_MAX] = '\0';
     scoreboard_save_pseudo(g->pseudo);
     g->score_submitted = false;
-    SubmitCurrentScore(g);
+    SubmitCurrentScore(g, hadPrevious ? previous : NULL);
 }
 
 static void DrawScoreboardScreen(game_t *g)
@@ -84,7 +91,7 @@ static void DrawScoreboardScreen(game_t *g)
     DrawRectangle(0, 0, WIDTH, HEIGHT, (Color){0, 0, 0, 160});
     Font f = g->hasFont ? g->font : GetFontDefault();
 
-    if (!g->has_last_result) SubmitCurrentScore(g);
+    if (!g->has_last_result) SubmitCurrentScore(g, NULL);
 
     // Pseudo field: mirrors pseudo_edit_buf into the real HTML <input>
     // every frame (web) so mobile's on-screen keyboard can edit it;
@@ -114,22 +121,41 @@ static void DrawScoreboardScreen(game_t *g)
     // Again click, roll, etc. below); typing itself doesn't spam the
     // server on every keystroke, only on blur/Enter/those actions.
 
-    // Roll button: circular arrow icon (drawn procedurally, two arcs +
-    // arrowhead -- no extra asset needed).
+    // Roll button: circular-arrow "refresh" icon (drawn procedurally --
+    // an open ring plus a triangular arrowhead tangent to it at the
+    // ring's leading end, so it actually reads as a refresh/reroll
+    // icon rather than an ambiguous blob).
     Rectangle roll = RollButtonRect();
     Vector2 rollCenter = { roll.x + roll.width / 2, roll.y + roll.height / 2 };
     Color rollColor = CheckCollisionPointRec(g->mpos, roll) ? (Color){110, 110, 125, 255} : (Color){75, 75, 88, 255};
     DrawCircleV(rollCenter, roll.width / 2, rollColor);
-    float r = roll.width / 2 - 8;
-    DrawRing(rollCenter, r - 2.5f, r, -40, 220, 24, RAYWHITE);
-    // arrowhead at the ring's leading end (~220 degrees)
-    float ang = 220.0f * DEG2RAD;
-    Vector2 tip = { rollCenter.x + cosf(ang) * r, rollCenter.y + sinf(ang) * r };
-    Vector2 perp = { -sinf(ang), cosf(ang) };
-    Vector2 back = { rollCenter.x + cosf(ang) * (r - 6), rollCenter.y + sinf(ang) * (r - 6) };
-    DrawTriangle(tip,
-                 (Vector2){back.x + perp.x * 5, back.y + perp.y * 5},
-                 (Vector2){back.x - perp.x * 5, back.y - perp.y * 5}, RAYWHITE);
+    float r = roll.width / 2 - 9;
+    // Ring spans ~280 degrees (leaves a visible gap so it doesn't read
+    // as a plain closed circle), starting just past the arrowhead so
+    // the two connect smoothly into one continuous "arrow going around
+    // a circle" shape.
+    float startAngle = -60.0f, endAngle = 200.0f;
+    DrawRing(rollCenter, r - 3.0f, r, startAngle, endAngle, 32, RAYWHITE);
+    // Arrowhead: a small triangle centered ON the ring at its leading
+    // (end-angle) tip, pointing in the ring's tangent direction (i.e.
+    // the direction of travel if you were walking along the arc
+    // clockwise), so it reads as "the arrow continues in this
+    // direction" rather than pointing radially in/out.
+    float endRad = endAngle * DEG2RAD;
+    Vector2 ringTip = { rollCenter.x + cosf(endRad) * r, rollCenter.y + sinf(endRad) * r };
+    Vector2 tangent = { -sinf(endRad), cosf(endRad) }; // direction of travel along the arc
+    Vector2 outward = { cosf(endRad), sinf(endRad) };  // radially outward at the tip
+    float headLen = 11, headWidth = 8;
+    Vector2 tip = { ringTip.x + tangent.x * headLen * 0.6f, ringTip.y + tangent.y * headLen * 0.6f };
+    Vector2 base1 = {
+        ringTip.x - tangent.x * headLen * 0.4f + outward.x * headWidth * 0.5f,
+        ringTip.y - tangent.y * headLen * 0.4f + outward.y * headWidth * 0.5f
+    };
+    Vector2 base2 = {
+        ringTip.x - tangent.x * headLen * 0.4f - outward.x * headWidth * 0.5f,
+        ringTip.y - tangent.y * headLen * 0.4f - outward.y * headWidth * 0.5f
+    };
+    DrawTriangle(tip, base1, base2, RAYWHITE);
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(g->mpos, roll)) {
         scoreboard_random_pseudo(g->pseudo_edit_buf, SCOREBOARD_NAME_MAX);
 #if defined(PLATFORM_WEB)

@@ -36,13 +36,16 @@ EM_JS(char *, js_scoreboard_load_pseudo, (), {
 });
 
 // out must point to an int[3]: [0]=best, [1]=tries, [2]=ok(0/1).
-EM_JS(void, js_scoreboard_submit, (const char *name, int score, int *out), {
+EM_JS(void, js_scoreboard_submit, (const char *name, int score, const char *rename_from, int *out), {
     var result = [0, 0, 0];
     try {
+        var body = { name: UTF8ToString(name), score: score };
+        var renameFrom = UTF8ToString(rename_from);
+        if (renameFrom) body.renameFrom = renameFrom;
         var xhr = new XMLHttpRequest();
         xhr.open('POST', '/api/score', false); // synchronous
         xhr.setRequestHeader('Content-Type', 'application/json');
-        xhr.send(JSON.stringify({ name: UTF8ToString(name), score: score }));
+        xhr.send(JSON.stringify(body));
         if (xhr.status >= 200 && xhr.status < 300) {
             var data = JSON.parse(xhr.responseText);
             result = [data.best | 0, data.tries | 0, 1];
@@ -84,10 +87,10 @@ void scoreboard_save_pseudo(const char *name)
     js_scoreboard_save_pseudo(name);
 }
 
-void scoreboard_submit(const char *name, int score, scoreboard_result_t *out)
+void scoreboard_submit(const char *name, int score, const char *rename_from, scoreboard_result_t *out)
 {
     int raw[3] = {0, 0, 0};
-    js_scoreboard_submit(name, score, raw);
+    js_scoreboard_submit(name, score, rename_from ? rename_from : "", raw);
     out->best = raw[0];
     out->tries = raw[1];
     out->ok = raw[2] != 0;
@@ -185,9 +188,10 @@ void scoreboard_save_pseudo(const char *name)
     (void)name;
 }
 
-void scoreboard_submit(const char *name, int score, scoreboard_result_t *out)
+void scoreboard_submit(const char *name, int score, const char *rename_from, scoreboard_result_t *out)
 {
     (void)name;
+    (void)rename_from;
     out->best = score;
     out->tries = 1;
     out->ok = true;

@@ -37,6 +37,28 @@
             });
             input.addEventListener('blur', function() { committed = true; });
 
+            // GLFW's own keydown listener (emscripten's library_glfw.js)
+            // is registered on `window` in the CAPTURE phase
+            // (addEventListener("keydown", GLFW.onKeydown, true)) and
+            // unconditionally calls preventDefault() on Backspace/Tab
+            // to stop the browser navigating back during normal
+            // gameplay. Capture-phase listeners on window fire before
+            // ANY listener on this input element could ever see the
+            // event (capture always reaches window first, regardless
+            // of the input's own listener phase) -- so Backspace was
+            // being eaten before it could ever delete a character,
+            // even while this field had focus. Fixed by registering
+            // our own window-level CAPTURE listener that runs first
+            // (added at page load, before Module/GLFW initializes) and
+            // calling stopImmediatePropagation() whenever this input is
+            // focused, so GLFW's listener never runs at all for
+            // keystrokes meant for the text field.
+            window.addEventListener('keydown', function(e) {
+                if (document.activeElement === input) {
+                    e.stopImmediatePropagation();
+                }
+            }, true);
+
             // Positions/sizes/shows the field every frame, but does NOT
             // touch its value -- the browser input is the live source
             // of truth for what's being typed once shown. (Previously

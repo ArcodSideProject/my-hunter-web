@@ -5,9 +5,18 @@
 //
 // Endpoints:
 //   GET  /api/score/:name      -> { name, best, tries } (best=0, tries=0 if unknown)
-//   POST /api/score            -> body { name, score }
+//   POST /api/score            -> body { name, score, renameFrom? }
 //                                 records one more try for `name`, bumps
 //                                 best if score > current best.
+//                                 If renameFrom is provided (and differs
+//                                 from name), that entry is folded into
+//                                 `name` first (its best/tries carried
+//                                 over if `name` doesn't exist yet) and
+//                                 then removed -- used when a player
+//                                 edits their pseudo, so the game-over
+//                                 screen's default auto-submitted entry
+//                                 gets replaced/renamed instead of
+//                                 leaving a duplicate row behind.
 //                                 returns { name, best, tries }
 //   GET  /api/scoreboard       -> full list, sorted by best desc, capped at 100
 //
@@ -158,6 +167,25 @@ const server = http.createServer((req, res) => {
             if (score > 1_000_000) return sendJson(res, 400, { error: 'score out of range' });
 
             const db = loadDb();
+
+            // Rename: explicit user request ("replace, don't create
+            // another entry"). Two cases:
+            //   - new name is unclaimed: MOVE the old row's stats over
+            //     (this is a genuine rename of your own history, not a
+            //     fresh identity).
+            //   - new name already belongs to someone (or was already
+            //     yours from a previous session): just drop the old
+            //     row and let the normal submit logic below apply to
+            //     the existing target entry -- "you become that
+            //     person" is allowed, but shouldn't inflate their
+            //     tries/best with your unrelated previous pseudo's
+            //     history.
+            const renameFrom = body.renameFrom ? sanitizeName(body.renameFrom) : null;
+            if (renameFrom && renameFrom !== name && db[renameFrom]) {
+                if (!db[name]) db[name] = db[renameFrom];
+                delete db[renameFrom];
+            }
+
             const entry = db[name] || { best: 0, tries: 0 };
             // Cap total distinct names so a flood of unique names can't
             // grow the JSON file unbounded (disk-fill DoS).

@@ -11,6 +11,7 @@
 #define MY_H
 
 #include "raylib.h"
+#include "scoreboard.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -112,6 +113,11 @@ typedef struct barrel {
     v2f velocity;
     float angle;
     rshape_t shadow;
+    // Scoreboard "final wave" barrel (see scoreboard.c): NULL for every
+    // normal barrel. When set, this barrel represents one scoreboard
+    // entry, and its name is drawn following the barrel every frame in
+    // a semi-transparent label until it dies.
+    char *scoreboard_name;
     struct barrel *next_barrel;
 } barrel_t;
 
@@ -187,6 +193,20 @@ typedef struct game {
     // the original's single-spawn-per-press only.
     float enter_hold_time;
     float enter_spawn_accum;
+
+    // Scoreboard (explicit user request, not in the original): a global,
+    // server-backed high score list keyed by a player-chosen pseudo.
+    // See scoreboard.c/scoreboard.h and web/scoreboard.js.
+    char pseudo[SCOREBOARD_NAME_MAX + 1];
+    char pseudo_edit_buf[SCOREBOARD_NAME_MAX + 1]; // live text-entry buffer
+    bool editing_pseudo;      // true while the pseudo text field has focus
+    bool score_submitted;     // guards against double-submitting this run
+    scoreboard_result_t last_result; // best/tries from the most recent submit
+    bool has_last_result;
+    scoreboard_entry_t board[SCOREBOARD_MAX_ENTRIES]; // cached full list
+    int board_count;
+    bool board_loaded;
+    bool show_scoreboard;     // true while the scoreboard screen overlay is open
 } game_t;
 
 ///////////////////////////////////////////////

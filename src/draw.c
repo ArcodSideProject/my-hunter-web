@@ -65,6 +65,47 @@ static void draw_text_int(textint_t *t, Font font, bool hasFont)
         DrawText(buf, (int)t->pos.x, (int)t->pos.y, 32, WHITE);
 }
 
+// Barrels-left counter (explicit user request, not in the original):
+// how many more barrels this round still has to throw. barrels_spawned
+// is cumulative across the whole run (never reset between rounds --
+// see easy_rounds.c's per-round thresholds, which are all checked
+// against that same running total), so "left" is simply this round's
+// threshold minus barrels_spawned, floored at 0. Round 5 also folds in
+// the scoreboard final-wave queue once it's started, since those
+// barrels are additional to the normal 70-barrel count.
+static int barrels_left_this_round(game_t *g)
+{
+    int threshold;
+    switch (g->round->number) {
+    case 1: threshold = 5; break;
+    case 2: threshold = 15; break;
+    case 3: threshold = 30; break;
+    case 4: threshold = 33; break;
+    case 5: threshold = 70; break;
+    default: return 0;
+    }
+    int left = threshold - g->barrels_spawned;
+    if (left < 0) left = 0;
+    if (g->round->number == 5 && g->final_wave_started) {
+        int queueLeft = g->final_wave_queue_count - g->final_wave_queue_next;
+        if (queueLeft < 0) queueLeft = 0;
+        left += queueLeft;
+    }
+    return left;
+}
+
+static void draw_barrels_left(game_t *g)
+{
+    char buf[32];
+    snprintf(buf, sizeof(buf), "Barrels left: %d", barrels_left_this_round(g));
+    Font f = g->hasFont ? g->font : GetFontDefault();
+    Vector2 pos = { 20, 80 };
+    if (g->hasFont)
+        DrawTextEx(f, buf, pos, 24, 1, (Color){230, 230, 230, 255});
+    else
+        DrawText(buf, (int)pos.x, (int)pos.y, 24, (Color){230, 230, 230, 255});
+}
+
 static void draw_enter_hint(game_t *g)
 {
     // Per explicit request: "PRESS ENTER" positioned behind the tree,
@@ -114,8 +155,10 @@ void draw_on_screen_background_and_gameplay(game_t *g)
     }
     draw_text_int(g->score, g->font, g->hasFont);
     draw_text_int(g->round, g->font, g->hasFont);
-    if (!g->in_menu && !g->game_over)
+    if (!g->in_menu && !g->game_over) {
+        draw_barrels_left(g);
         draw_enter_hint(g);
+    }
 }
 
 void draw_on_screen_foreground(game_t *g)

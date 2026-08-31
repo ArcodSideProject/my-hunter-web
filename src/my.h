@@ -242,6 +242,7 @@ void manage_mouse_click(game_t *g);
 void manage_keys(game_t *g, int key_code);
 void move_sight_to_cursor(game_t *g);
 void blur_tree(game_t *g);
+void text_input_update(char *buf, int max_len);
 
 void animate_gragas(gragas_t *gragas, float dt, float rawDt, barrel_t *barrel);
 void animate_gragas_spawn(gragas_t *gragas, float rawDt);

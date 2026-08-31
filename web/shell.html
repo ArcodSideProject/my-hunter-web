@@ -18,6 +18,56 @@
 <body>
     <div id="loading">Loading...</div>
     <canvas id="canvas" oncontextmenu="event.preventDefault()"></canvas>
+    <!-- Pseudo edit field (scoreboard): a REAL HTML input, not drawn on
+         the canvas, so mobile browsers actually pop up their on-screen
+         keyboard when it's focused -- raylib's canvas has no way to
+         trigger that on its own. Positioned/sized over the canvas from
+         C via pseudoInputShow() (see below), hidden otherwise. -->
+    <input id="pseudo-input" type="text" maxlength="20" autocomplete="off"
+           style="position:absolute; display:none; box-sizing:border-box;
+                  font-family:sans-serif; border-radius:6px; border:2px solid #82828f;
+                  background:#23232a; color:#fff; padding:0 8px;">
+    <script type='text/javascript'>
+        (function() {
+            var input = document.getElementById('pseudo-input');
+            var committed = false;
+            input.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter') { committed = true; input.blur(); }
+            });
+            input.addEventListener('blur', function() { committed = true; });
+
+            window.pseudoInputShow = function(x, y, w, h, fontSize, value) {
+                var canvas = document.getElementById('canvas');
+                var rect = canvas.getBoundingClientRect();
+                // Canvas game-space is always WIDTH x HEIGHT (raylib's
+                // logical resolution); CSS may scale it via object-fit,
+                // so map game pixels -> on-screen CSS pixels.
+                var scaleX = rect.width / canvas.width;
+                var scaleY = rect.height / canvas.height;
+                input.style.left = (rect.left + x * scaleX) + 'px';
+                input.style.top = (rect.top + y * scaleY) + 'px';
+                input.style.width = (w * scaleX) + 'px';
+                input.style.height = (h * scaleY) + 'px';
+                input.style.fontSize = (fontSize * scaleY) + 'px';
+                input.style.display = 'block';
+                if (input.value !== value) input.value = value;
+                committed = false;
+                input.focus();
+            };
+            window.pseudoInputHide = function() {
+                input.style.display = 'none';
+                input.blur();
+            };
+            window.pseudoInputGetValue = function() {
+                return input.value;
+            };
+            window.pseudoInputConsumeCommitted = function() {
+                var c = committed;
+                committed = false;
+                return c;
+            };
+        })();
+    </script>
     <script type='text/javascript'>
         var Module = {
             print: (function() { return function(text) { console.log(text); }; })(),

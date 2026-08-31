@@ -76,10 +76,11 @@ function sanitizeName(name) {
     if (typeof name !== 'string') return null;
     const trimmed = name.trim().slice(0, MAX_NAME_LEN);
     // Restrict to a safe charset: letters (incl. basic accented), digits,
-    // space, underscore, hyphen. Blocks control chars / HTML / anything
-    // that could matter if this is ever rendered unescaped client-side,
-    // and keeps the JSON file's keys predictable.
-    if (!/^[\p{L}\p{N} _-]+$/u.test(trimmed)) return null;
+    // space, underscore, hyphen, apostrophe (default pseudos include
+    // possessive combos like "Annie's Bear"). Blocks control chars /
+    // HTML / anything that could matter if this is ever rendered
+    // unescaped client-side, and keeps the JSON file's keys predictable.
+    if (!/^[\p{L}\p{N} _'-]+$/u.test(trimmed)) return null;
     if (trimmed.length === 0) return null;
     return trimmed;
 }

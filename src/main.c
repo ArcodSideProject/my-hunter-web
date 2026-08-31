@@ -33,38 +33,19 @@ static Rectangle PlayAgainButtonRect(game_t *g)
     };
 }
 
-// Scoreboard UI layout: a card centered above the Play Again button,
-// holding either the pseudo-entry field or the best/tries readout plus
-// "Change name" / "Scoreboard" buttons.
-static Rectangle ScoreboardCardRect(void)
+// Scoreboard UI layout: the game-over screen IS the scoreboard --
+// pseudo row (editable text field + roll button) at the top, live
+// board below (highlighting the current pseudo's row), Play Again
+// still available (drawn separately, partially behind the tree).
+static Rectangle PseudoFieldRect(void)
 {
-    float w = 360, h = 190;
-    return (Rectangle){ WIDTH / 2.0f - w / 2, HEIGHT * 0.18f, w, h };
+    return (Rectangle){ WIDTH / 2.0f - 160, HEIGHT * 0.07f, 260, 40 };
 }
 
-static Rectangle PseudoFieldRect(Rectangle card)
+static Rectangle RollButtonRect(void)
 {
-    return (Rectangle){ card.x + 20, card.y + 55, card.width - 40, 40 };
-}
-
-static Rectangle SubmitNameButtonRect(Rectangle card)
-{
-    return (Rectangle){ card.x + card.width / 2 - 70, card.y + 110, 140, 40 };
-}
-
-static Rectangle ChangeNameButtonRect(Rectangle card)
-{
-    return (Rectangle){ card.x + 15, card.y + card.height - 50, 150, 36 };
-}
-
-static Rectangle ScoreboardButtonRect(Rectangle card)
-{
-    return (Rectangle){ card.x + card.width - 165, card.y + card.height - 50, 150, 36 };
-}
-
-static Rectangle CloseScoreboardButtonRect(void)
-{
-    return (Rectangle){ WIDTH / 2.0f - 60, HEIGHT * 0.85f, 120, 40 };
+    Rectangle field = PseudoFieldRect();
+    return (Rectangle){ field.x + field.width + 10, field.y, 40, 40 };
 }
 
 static void SubmitCurrentScore(game_t *g)
@@ -73,56 +54,81 @@ static void SubmitCurrentScore(game_t *g)
     scoreboard_submit(g->pseudo, g->score->number, &g->last_result);
     g->has_last_result = true;
     g->score_submitted = true;
+    // Live-refresh the board so the just-submitted score shows
+    // immediately (explicit user request: editing your name should
+    // live-update the scoreboard you're looking at -- the same applies
+    // to a fresh submission).
+    g->board_count = scoreboard_fetch_all(g->board);
+    g->board_loaded = true;
 }
 
-static void DrawScoreboardCard(game_t *g)
+// Commits pseudo_edit_buf as the active pseudo: saves it locally,
+// re-submits this run's score under the new name (explicit user
+// request: entering an already-taken name just makes you that person,
+// no ownership/password), and refreshes the board so the change is
+// reflected live.
+static void CommitPseudo(game_t *g)
 {
-    Rectangle card = ScoreboardCardRect();
+    if (g->pseudo_edit_buf[0] == '\0') return; // ignore an empty field, keep the previous pseudo
+    if (strcmp(g->pseudo, g->pseudo_edit_buf) == 0 && g->has_last_result)
+        return; // no actual change
+    strncpy(g->pseudo, g->pseudo_edit_buf, SCOREBOARD_NAME_MAX);
+    g->pseudo[SCOREBOARD_NAME_MAX] = '\0';
+    scoreboard_save_pseudo(g->pseudo);
+    g->score_submitted = false;
+    SubmitCurrentScore(g);
+}
+
+static void DrawScoreboardScreen(game_t *g)
+{
+    DrawRectangle(0, 0, WIDTH, HEIGHT, (Color){0, 0, 0, 160});
     Font f = g->hasFont ? g->font : GetFontDefault();
-    DrawRectangleRounded(card, 0.08f, 8, (Color){20, 20, 25, 235});
-    DrawRectangleRoundedLinesEx(card, 0.08f, 8, 2, (Color){90, 90, 100, 255});
-
-    if (g->editing_pseudo) {
-        const char *title = "Enter your name";
-        Vector2 ts = MeasureTextEx(f, title, 22, 1);
-        DrawTextEx(f, title, (Vector2){card.x + card.width / 2 - ts.x / 2, card.y + 14}, 22, 1, RAYWHITE);
-
-        Rectangle field = PseudoFieldRect(card);
-        DrawRectangleRounded(field, 0.2f, 6, (Color){35, 35, 42, 255});
-        DrawRectangleRoundedLinesEx(field, 0.2f, 6, 2, (Color){130, 130, 145, 255});
-        text_input_update(g->pseudo_edit_buf, SCOREBOARD_NAME_MAX);
-        char display[SCOREBOARD_NAME_MAX + 2];
-        snprintf(display, sizeof(display), "%s%s", g->pseudo_edit_buf,
-                 ((int)(GetTime() * 2) % 2 == 0) ? "|" : "");
-        DrawTextEx(f, display, (Vector2){field.x + 10, field.y + 9}, 22, 1, RAYWHITE);
-
-        Rectangle btn = SubmitNameButtonRect(card);
-        bool valid = g->pseudo_edit_buf[0] != '\0';
-        Color btnColor = valid ?
-            (CheckCollisionPointRec(g->mpos, btn) ? (Color){80, 160, 90, 255} : (Color){60, 130, 70, 255})
-            : (Color){60, 60, 65, 255};
-        DrawRectangleRounded(btn, 0.25f, 8, btnColor);
-        const char *label = "Confirm";
-        Vector2 ls = MeasureTextEx(f, label, 20, 1);
-        DrawTextEx(f, label, (Vector2){btn.x + btn.width / 2 - ls.x / 2, btn.y + btn.height / 2 - ls.y / 2}, 20, 1, RAYWHITE);
-
-        if (valid && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(g->mpos, btn)) {
-            strncpy(g->pseudo, g->pseudo_edit_buf, SCOREBOARD_NAME_MAX);
-            g->pseudo[SCOREBOARD_NAME_MAX] = '\0';
-            scoreboard_save_pseudo(g->pseudo);
-            g->editing_pseudo = false;
-            g->score_submitted = false; // allow (re-)submission under the new/confirmed name
-            SubmitCurrentScore(g);
-        }
-        return;
-    }
 
     if (!g->has_last_result) SubmitCurrentScore(g);
 
-    char nameLine[SCOREBOARD_NAME_MAX + 16];
-    snprintf(nameLine, sizeof(nameLine), "%s", g->pseudo);
-    Vector2 ns = MeasureTextEx(f, nameLine, 24, 1);
-    DrawTextEx(f, nameLine, (Vector2){card.x + card.width / 2 - ns.x / 2, card.y + 14}, 24, 1, RAYWHITE);
+    // Pseudo field: mirrors pseudo_edit_buf into the real HTML <input>
+    // every frame (web) so mobile's on-screen keyboard can edit it;
+    // desktop draws/handles it directly since there's no browser input
+    // to delegate to.
+    Rectangle field = PseudoFieldRect();
+#if defined(PLATFORM_WEB)
+    pseudo_input_show(field.x, field.y, field.width, field.height, 22, g->pseudo_edit_buf);
+#else
+    DrawRectangleRounded(field, 0.2f, 6, (Color){35, 35, 42, 255});
+    DrawRectangleRoundedLinesEx(field, 0.2f, 6, 2, (Color){130, 130, 145, 255});
+    char display[SCOREBOARD_NAME_MAX + 2];
+    snprintf(display, sizeof(display), "%s%s", g->pseudo_edit_buf,
+             ((int)(GetTime() * 2) % 2 == 0) ? "|" : "");
+    DrawTextEx(f, display, (Vector2){field.x + 10, field.y + 9}, 22, 1, RAYWHITE);
+#endif
+    bool committed = pseudo_input_update(g->pseudo_edit_buf, SCOREBOARD_NAME_MAX);
+    if (committed) CommitPseudo(g);
+    // Any edit (even before commit) should feel "live" per the request
+    // -- once it no longer matches the last committed pseudo and isn't
+    // empty, commit it as soon as focus would naturally be lost (Play
+    // Again click, roll, etc. below); typing itself doesn't spam the
+    // server on every keystroke, only on blur/Enter/those actions.
+
+    // Roll button: circular arrow icon (drawn procedurally, two arcs +
+    // arrowhead -- no extra asset needed).
+    Rectangle roll = RollButtonRect();
+    Vector2 rollCenter = { roll.x + roll.width / 2, roll.y + roll.height / 2 };
+    Color rollColor = CheckCollisionPointRec(g->mpos, roll) ? (Color){110, 110, 125, 255} : (Color){75, 75, 88, 255};
+    DrawCircleV(rollCenter, roll.width / 2, rollColor);
+    float r = roll.width / 2 - 8;
+    DrawRing(rollCenter, r - 2.5f, r, -40, 220, 24, RAYWHITE);
+    // arrowhead at the ring's leading end (~220 degrees)
+    float ang = 220.0f * DEG2RAD;
+    Vector2 tip = { rollCenter.x + cosf(ang) * r, rollCenter.y + sinf(ang) * r };
+    Vector2 perp = { -sinf(ang), cosf(ang) };
+    Vector2 back = { rollCenter.x + cosf(ang) * (r - 6), rollCenter.y + sinf(ang) * (r - 6) };
+    DrawTriangle(tip,
+                 (Vector2){back.x + perp.x * 5, back.y + perp.y * 5},
+                 (Vector2){back.x - perp.x * 5, back.y - perp.y * 5}, RAYWHITE);
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(g->mpos, roll)) {
+        scoreboard_random_pseudo(g->pseudo_edit_buf, SCOREBOARD_NAME_MAX);
+        CommitPseudo(g);
+    }
 
     char statsLine[64];
     if (g->has_last_result && g->last_result.ok) {
@@ -130,66 +136,24 @@ static void DrawScoreboardCard(game_t *g)
     } else {
         snprintf(statsLine, sizeof(statsLine), "Score: %d (offline)", g->score->number);
     }
-    Vector2 ss = MeasureTextEx(f, statsLine, 20, 1);
-    DrawTextEx(f, statsLine, (Vector2){card.x + card.width / 2 - ss.x / 2, card.y + 50}, 20, 1, (Color){220, 220, 220, 255});
+    Vector2 ss = MeasureTextEx(f, statsLine, 18, 1);
+    DrawTextEx(f, statsLine, (Vector2){WIDTH / 2.0f - ss.x / 2, field.y + field.height + 8}, 18, 1, (Color){220, 220, 220, 255});
 
-    Rectangle changeBtn = ChangeNameButtonRect(card);
-    Color changeColor = CheckCollisionPointRec(g->mpos, changeBtn) ? (Color){90, 90, 100, 255} : (Color){60, 60, 70, 255};
-    DrawRectangleRounded(changeBtn, 0.25f, 8, changeColor);
-    Vector2 cs = MeasureTextEx(f, "Change name", 16, 1);
-    DrawTextEx(f, "Change name", (Vector2){changeBtn.x + changeBtn.width / 2 - cs.x / 2, changeBtn.y + changeBtn.height / 2 - cs.y / 2}, 16, 1, RAYWHITE);
-    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(g->mpos, changeBtn)) {
-        strncpy(g->pseudo_edit_buf, g->pseudo, SCOREBOARD_NAME_MAX);
-        g->pseudo_edit_buf[SCOREBOARD_NAME_MAX] = '\0';
-        g->editing_pseudo = true;
-    }
-
-    Rectangle boardBtn = ScoreboardButtonRect(card);
-    Color boardColor = CheckCollisionPointRec(g->mpos, boardBtn) ? (Color){90, 90, 100, 255} : (Color){60, 60, 70, 255};
-    DrawRectangleRounded(boardBtn, 0.25f, 8, boardColor);
-    Vector2 bs = MeasureTextEx(f, "Scoreboard", 16, 1);
-    DrawTextEx(f, "Scoreboard", (Vector2){boardBtn.x + boardBtn.width / 2 - bs.x / 2, boardBtn.y + boardBtn.height / 2 - bs.y / 2}, 16, 1, RAYWHITE);
-    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(g->mpos, boardBtn)) {
-        g->board_count = scoreboard_fetch_all(g->board);
-        g->board_loaded = true;
-        g->show_scoreboard = true;
-    }
-}
-
-static void DrawScoreboardOverlay(game_t *g)
-{
-    DrawRectangle(0, 0, WIDTH, HEIGHT, (Color){0, 0, 0, 200});
-    Font f = g->hasFont ? g->font : GetFontDefault();
-
+    // Live scoreboard list.
     float listW = 420;
     float listX = WIDTH / 2.0f - listW / 2;
-    float top = HEIGHT * 0.12f;
-
-    const char *title = "Scoreboard";
-    Vector2 ts = MeasureTextEx(f, title, 28, 1);
-    DrawTextEx(f, title, (Vector2){WIDTH / 2.0f - ts.x / 2, top}, 28, 1, RAYWHITE);
-
-    float rowY = top + 50;
-    float rowH = 26;
+    float rowY = field.y + field.height + 40;
+    float rowH = 24;
     if (g->board_count == 0) {
         DrawTextEx(f, "No scores yet.", (Vector2){listX, rowY}, 18, 1, (Color){200, 200, 200, 255});
     }
-    for (int i = 0; i < g->board_count && rowY + rowH < HEIGHT * 0.8f; i++) {
+    for (int i = 0; i < g->board_count && rowY + rowH < HEIGHT * 0.82f; i++) {
         char line[80];
         snprintf(line, sizeof(line), "%2d. %-20s %6d (%d tries)",
                  i + 1, g->board[i].name, g->board[i].best, g->board[i].tries);
         bool isMe = strcmp(g->board[i].name, g->pseudo) == 0;
         DrawTextEx(f, line, (Vector2){listX, rowY}, 18, 1, isMe ? (Color){255, 210, 90, 255} : RAYWHITE);
         rowY += rowH;
-    }
-
-    Rectangle closeBtn = CloseScoreboardButtonRect();
-    Color closeColor = CheckCollisionPointRec(g->mpos, closeBtn) ? (Color){160, 70, 60, 255} : (Color){120, 50, 45, 255};
-    DrawRectangleRounded(closeBtn, 0.25f, 8, closeColor);
-    Vector2 cs = MeasureTextEx(f, "Close", 20, 1);
-    DrawTextEx(f, "Close", (Vector2){closeBtn.x + closeBtn.width / 2 - cs.x / 2, closeBtn.y + closeBtn.height / 2 - cs.y / 2}, 20, 1, RAYWHITE);
-    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(g->mpos, closeBtn)) {
-        g->show_scoreboard = false;
     }
 }
 
@@ -232,7 +196,6 @@ static void ResetGameKeepAssets(game_t *g)
     g->enter_spawn_accum = 0;
     g->score_submitted = false;
     g->has_last_result = false;
-    g->show_scoreboard = false;
     g->final_wave_spawned = false;
     create_texts(g);
 }
@@ -244,9 +207,16 @@ static void frame(void)
     g.mpos = GetMousePosition();
 
     if (g.game_over) {
-        if (!g.show_scoreboard && !g.editing_pseudo &&
-            IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+        // Play Again is only clickable outside the pseudo field's own
+        // area, so a click meant for the text field never accidentally
+        // restarts the run.
+        Rectangle field = PseudoFieldRect();
+        bool overField = CheckCollisionPointRec(g.mpos, field);
+        if (!overField && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
             CheckCollisionPointRec(g.mpos, PlayAgainButtonRect(&g))) {
+#if defined(PLATFORM_WEB)
+            pseudo_input_hide();
+#endif
             ResetGameKeepAssets(&g);
         }
         move_sight_to_cursor(&g);
@@ -263,12 +233,14 @@ static void frame(void)
                                         // explicit request ("hidden
                                         // halfly behind the tree")
         draw_on_screen_foreground(&g); // tree, front_grass, sight
-        DrawScoreboardCard(&g);
-        if (g.show_scoreboard) DrawScoreboardOverlay(&g);
+        DrawScoreboardScreen(&g);
         EndDrawing();
         return;
     }
 
+#if defined(PLATFORM_WEB)
+    pseudo_input_hide(); // not on the game-over screen -- keep the HTML field out of the way
+#endif
     spawn_round(&g, g.game_dt);
 
     event_handler(&g);
@@ -298,8 +270,13 @@ int main(void)
     memset(&g, 0, sizeof(g));
     initialize_game(&g);
 
-    bool hadSavedPseudo = scoreboard_load_saved_pseudo(g.pseudo);
-    g.editing_pseudo = !hadSavedPseudo; // first-ever run: land straight in the name field
+    // Least-friction default pseudo (explicit user request): no "enter
+    // your name" gate at all. If a pseudo was saved from a previous
+    // visit, reuse it; otherwise roll a random LoL-themed one.
+    if (!scoreboard_load_saved_pseudo(g.pseudo))
+        scoreboard_random_pseudo(g.pseudo, SCOREBOARD_NAME_MAX);
+    strncpy(g.pseudo_edit_buf, g.pseudo, SCOREBOARD_NAME_MAX);
+    g.pseudo_edit_buf[SCOREBOARD_NAME_MAX] = '\0';
 
 #if defined(PLATFORM_WEB)
     emscripten_set_main_loop(frame, 0, 1);

@@ -252,6 +252,7 @@ void manage_keys(game_t *g, int key_code);
 void move_sight_to_cursor(game_t *g);
 void blur_tree(game_t *g);
 void pseudo_input_show(float x, float y, float w, float h, float font_size, const char *value);
+void pseudo_input_set_value(const char *value);
 void pseudo_input_hide(void);
 bool pseudo_input_update(char *buf, int max_len);
 void scoreboard_random_pseudo(char *out, int max_len);

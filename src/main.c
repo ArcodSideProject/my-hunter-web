@@ -92,7 +92,12 @@ static void DrawScoreboardScreen(game_t *g)
     // to delegate to.
     Rectangle field = PseudoFieldRect();
 #if defined(PLATFORM_WEB)
+    static bool pseudoFieldShownOnce = false;
     pseudo_input_show(field.x, field.y, field.width, field.height, 22, g->pseudo_edit_buf);
+    if (!pseudoFieldShownOnce) {
+        pseudo_input_set_value(g->pseudo_edit_buf); // seed the HTML field with the initial/default pseudo once
+        pseudoFieldShownOnce = true;
+    }
 #else
     DrawRectangleRounded(field, 0.2f, 6, (Color){35, 35, 42, 255});
     DrawRectangleRoundedLinesEx(field, 0.2f, 6, 2, (Color){130, 130, 145, 255});
@@ -127,6 +132,9 @@ static void DrawScoreboardScreen(game_t *g)
                  (Vector2){back.x - perp.x * 5, back.y - perp.y * 5}, RAYWHITE);
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(g->mpos, roll)) {
         scoreboard_random_pseudo(g->pseudo_edit_buf, SCOREBOARD_NAME_MAX);
+#if defined(PLATFORM_WEB)
+        pseudo_input_set_value(g->pseudo_edit_buf); // push the roll into the HTML field explicitly
+#endif
         CommitPseudo(g);
     }
 

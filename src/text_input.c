@@ -15,9 +15,15 @@
 #if defined(PLATFORM_WEB)
 #include <emscripten/emscripten.h>
 
-EM_JS(void, js_pseudo_input_show, (float x, float y, float w, float h, float fontSize, const char *value), {
+EM_JS(void, js_pseudo_input_show, (float x, float y, float w, float h, float fontSize), {
     if (typeof window.pseudoInputShow === 'function') {
-        window.pseudoInputShow(x, y, w, h, fontSize, UTF8ToString(value));
+        window.pseudoInputShow(x, y, w, h, fontSize);
+    }
+});
+
+EM_JS(void, js_pseudo_input_set_value, (const char *value), {
+    if (typeof window.pseudoInputSetValue === 'function') {
+        window.pseudoInputSetValue(UTF8ToString(value));
     }
 });
 
@@ -40,7 +46,13 @@ EM_JS(int, js_pseudo_input_consume_committed, (), {
 
 void pseudo_input_show(float x, float y, float w, float h, float font_size, const char *value)
 {
-    js_pseudo_input_show(x, y, w, h, font_size, value);
+    (void)value; // no longer force-pushed every frame -- see set_value below
+    js_pseudo_input_show(x, y, w, h, font_size);
+}
+
+void pseudo_input_set_value(const char *value)
+{
+    js_pseudo_input_set_value(value);
 }
 
 void pseudo_input_hide(void)
@@ -62,6 +74,11 @@ bool pseudo_input_update(char *buf, int max_len)
 void pseudo_input_show(float x, float y, float w, float h, float font_size, const char *value)
 {
     (void)x; (void)y; (void)w; (void)h; (void)font_size; (void)value;
+}
+
+void pseudo_input_set_value(const char *value)
+{
+    (void)value; // desktop reads/writes the buffer directly in main.c, nothing to sync
 }
 
 void pseudo_input_hide(void)

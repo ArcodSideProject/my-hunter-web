@@ -31,17 +31,24 @@
         (function() {
             var input = document.getElementById('pseudo-input');
             var committed = false;
+            var shown = false;
             input.addEventListener('keydown', function(e) {
                 if (e.key === 'Enter') { committed = true; input.blur(); }
             });
             input.addEventListener('blur', function() { committed = true; });
 
-            window.pseudoInputShow = function(x, y, w, h, fontSize, value) {
+            // Positions/sizes/shows the field every frame, but does NOT
+            // touch its value -- the browser input is the live source
+            // of truth for what's being typed once shown. (Previously
+            // this also force-set input.value from the C-side buffer
+            // every frame, which raced with typing: C's buffer only
+            // catches up to what was typed via pseudoInputGetValue()
+            // AFTER this runs, so the next frame's forced value write
+            // kept reverting every keystroke before it could ever reach
+            // the C side -- the actual cause of "can't type a name".)
+            window.pseudoInputShow = function(x, y, w, h, fontSize) {
                 var canvas = document.getElementById('canvas');
                 var rect = canvas.getBoundingClientRect();
-                // Canvas game-space is always WIDTH x HEIGHT (raylib's
-                // logical resolution); CSS may scale it via object-fit,
-                // so map game pixels -> on-screen CSS pixels.
                 var scaleX = rect.width / canvas.width;
                 var scaleY = rect.height / canvas.height;
                 input.style.left = (rect.left + x * scaleX) + 'px';
@@ -50,13 +57,18 @@
                 input.style.height = (h * scaleY) + 'px';
                 input.style.fontSize = (fontSize * scaleY) + 'px';
                 input.style.display = 'block';
-                if (input.value !== value) input.value = value;
-                committed = false;
-                input.focus();
+                if (!shown) { input.focus(); shown = true; }
             };
             window.pseudoInputHide = function() {
                 input.style.display = 'none';
                 input.blur();
+                shown = false;
+            };
+            // Explicit, C-initiated value override (initial default
+            // pseudo, roll button) -- separate from the per-frame
+            // show() above so it never fights with live typing.
+            window.pseudoInputSetValue = function(value) {
+                input.value = value;
             };
             window.pseudoInputGetValue = function() {
                 return input.value;

@@ -54,6 +54,18 @@ int rd_5(float *spawn_rate, int *barrel_health, game_t *g)
     // finish on its own. Using ">=" makes the natural spawn cap alone
     // sufficient to trigger the win/end condition.
     if (g->barrels_spawned >= 70 && g->barrel_count == 0) {
+        // Scoreboard "final wave" (explicit user request): before
+        // actually ending the round, spawn one extra barrel per known
+        // scoreboard entry. spawn_scoreboard_final_wave() bumps
+        // barrels_spawned/barrel_count itself via spawn_barrel(), so
+        // this same condition naturally re-evaluates false until that
+        // wave is cleared too -- the round only truly ends once every
+        // scoreboard barrel is dead as well. Guarded internally so it
+        // only ever runs once.
+        if (!g->final_wave_spawned) {
+            spawn_scoreboard_final_wave(g);
+            return 0;
+        }
         g->game_over = true;
         return 1;
     }

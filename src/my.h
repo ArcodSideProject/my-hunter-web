@@ -207,6 +207,7 @@ typedef struct game {
     int board_count;
     bool board_loaded;
     bool show_scoreboard;     // true while the scoreboard screen overlay is open
+    bool final_wave_spawned;  // guards the one-time scoreboard-barrel final wave
 } game_t;
 
 ///////////////////////////////////////////////
@@ -268,6 +269,7 @@ void create_gragas(gragas_t *gragas, Texture2D gragas_texture);
 rsprite_t create_start_button(Texture2D start_button_texture);
 
 void spawn_barrel(game_t *g, int max_health);
+void spawn_scoreboard_final_wave(game_t *g);
 void bounce_on_border(barrel_t *barrel, float rawDt);
 void for_touched_barrels(barrel_t *barrel, Vector2 mpos);
 void kill_barrel(barrel_t *barrel);
@@ -277,6 +279,7 @@ void calculate_barrel_shadow(barrel_t *barrel);
 void free_background(bg_t *bg);
 void free_barrel(barrel_t *barrel);
 void free_barrels(barrel_t *barrel, int barrel_count);
+void draw_barrels(barrel_t *barrel, bool spawning, int barrel_count, Font font, bool hasFont);
 void free_gragas(gragas_t *gragas);
 void big_free(game_t *g);
 

@@ -14,15 +14,43 @@ static void draw_background(bg_t *bg)
     draw_sprite(&bg->far_woods);
 }
 
-void draw_barrels(barrel_t *barrel, bool spawning, int barrel_count)
+// Scoreboard "final wave" name label (explicit user request): a small
+// pill with a semi-transparent background, drawn just above the
+// barrel, following it every frame since it's positioned from the
+// barrel's own live global bounds -- no separate tracking needed.
+static void draw_scoreboard_name_label(barrel_t *barrel, Font font, bool hasFont)
+{
+    if (barrel->scoreboard_name == NULL || barrel->dead)
+        return;
+    Font f = hasFont ? font : GetFontDefault();
+    int fontSize = 18;
+    Vector2 size = MeasureTextEx(f, barrel->scoreboard_name, fontSize, 1);
+    float padX = 8, padY = 4;
+    Rectangle bg = {
+        barrel->rect.x + barrel->rect.width / 2 - size.x / 2 - padX,
+        barrel->rect.y - size.y - padY * 2 - 4,
+        size.x + padX * 2,
+        size.y + padY * 2
+    };
+    DrawRectangleRounded(bg, 0.3f, 6, (Color){0, 0, 0, 140});
+    Vector2 textPos = { bg.x + padX, bg.y + padY };
+    if (hasFont)
+        DrawTextEx(f, barrel->scoreboard_name, textPos, fontSize, 1, RAYWHITE);
+    else
+        DrawText(barrel->scoreboard_name, (int)textPos.x, (int)textPos.y, fontSize, RAYWHITE);
+}
+
+void draw_barrels(barrel_t *barrel, bool spawning, int barrel_count, Font font, bool hasFont)
 {
     if (barrel_count == 0 || barrel == NULL)
         return;
     do {
         if (!(spawning ^ barrel->spawning) && !barrel->dead)
             draw_shadow(&barrel->shadow);
-        if (!(spawning ^ barrel->spawning))
+        if (!(spawning ^ barrel->spawning)) {
             draw_sprite(&barrel->sp);
+            draw_scoreboard_name_label(barrel, font, hasFont);
+        }
         barrel = barrel->next_barrel;
     } while (barrel != NULL);
 }
@@ -76,9 +104,9 @@ void draw_on_screen_background_and_gameplay(game_t *g)
     draw_background(g->bg);
     if (g->in_menu)
         draw_sprite(&g->start_button);
-    draw_barrels(g->barrel, true, g->barrel_count);
+    draw_barrels(g->barrel, true, g->barrel_count, g->font, g->hasFont);
     draw_sprite(&g->bg->tiles);
-    draw_barrels(g->barrel, false, g->barrel_count);
+    draw_barrels(g->barrel, false, g->barrel_count, g->font, g->hasFont);
     if (g->gragas != NULL) {
         draw_shadow(&g->gragas->shadow);
         draw_sprite(&g->gragas->sp);

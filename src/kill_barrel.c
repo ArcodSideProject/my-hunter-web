@@ -47,6 +47,7 @@ void kill_barrel(barrel_t *barrel)
 
 void free_barrel(barrel_t *barrel)
 {
+    free(barrel->scoreboard_name);
     free(barrel);
 }
 

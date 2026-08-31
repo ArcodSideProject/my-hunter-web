@@ -41,5 +41,6 @@ Texture2D explosion_texture)
     barrel->explosion_texture = explosion_texture;
     barrel->at_floor = false;
     barrel->rect_anim = (int_rect){0, 0, EXPLOSION_WIDTH, EXPLOSION_HEIGHT};
+    barrel->scoreboard_name = NULL; // set by spawn_scoreboard_barrel() for the final wave only
     barrel->next_barrel = NULL;
 }

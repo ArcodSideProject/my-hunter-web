@@ -233,6 +233,7 @@ static void ResetGameKeepAssets(game_t *g)
     g->score_submitted = false;
     g->has_last_result = false;
     g->show_scoreboard = false;
+    g->final_wave_spawned = false;
     create_texts(g);
 }
 
